@@ -1,0 +1,25 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container-fluid">
+
+    {% include "partials/emergency_bar.html" %}
+
+    <ul class="nav nav-tabs mb-4" id="botTabs">
+        <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab" data-bs-target="#tab-control" type="button">⚙️ Control Center & Στρατηγική</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-backtest" type="button">🔬 Backtest Engine</button></li>
+        <li class="nav-item"><button class="nav-link" data-bs-toggle="tab" data-bs-target="#tab-logs" type="button">📋 Live Terminal Logs</button></li>
+    </ul>
+
+    <div class="tab-content">
+        {% include "partials/tab_control.html" %}
+        {% include "partials/tab_backtest.html" %}
+        {% include "partials/tab_logs.html" %}
+    </div>
+
+</div>
+{% endblock %}
+
+{% block scripts %}
+    {% include "partials/scripts.html" %}
+{% endblock %}

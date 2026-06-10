@@ -1,0 +1,39 @@
+trading_bot/
+│
+├── venv/
+├── .env
+├── requirements.txt
+├── config.py
+├── app.py
+│
+├── exchange/
+│   ├── __init__.py
+│   └── binance_client.py
+│
+├── indicators/
+│   ├── __init__.py
+│   └── technical_analysis.py
+│
+├── strategies/
+│   ├── __init__.py
+│   └── strategy_manager.py
+│
+├── utils/
+│   ├── __init__.py
+│   └── logger.py
+│
+├── backtest/
+│   ├── __init__.py
+│   ├── engine.py
+│   ├── metrics.py
+│   └── trend_cache.py          # ΝΕΟ ΑΡΧΕΙΟ (caching BTC trend με 1d & 4h)
+│
+└── templates/
+    ├── base.html
+    ├── index.html
+    └── partials/
+        ├── emergency_bar.html
+        ├── tab_control.html
+        ├── tab_backtest.html
+        ├── tab_logs.html
+        └── scripts.html

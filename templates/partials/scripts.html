@@ -1,0 +1,935 @@
+<script>
+    /*
+        ============================================================
+        DEFAULT_CONFIGS — Injection από Flask/Jinja2
+        ============================================================
+        Το [[ defaults | tojson | safe ]] είναι Jinja2 expression που τρέχει
+        στον SERVER πριν σταλεί η σελίδα στον browser:
+          - defaults      : Python dict με τις default τιμές ΟΛΩΝ των δεικτών
+          - | tojson      : μετατρέπει το Python dict σε JSON string
+          - | safe        : λέει στο Jinja να μην κάνει HTML escaping (αφήνει τα quotes)
+        
+        Αποτέλεσμα: o browser "βλέπει" κάτι σαν:
+            const DEFAULT_CONFIGS = {"RSI": {"period": 14, "oversold": 30, ...}, "MACD": {...}, ...};
+        
+        Χρησιμοποιείται από τη restoreDefaults() για να επαναφέρει τιμές.
+    */
+    const DEFAULT_CONFIGS = {{ defaults | tojson | safe }};
+</script>
+
+<script>
+    // ============================================================
+    // toggleTrailingFields()
+    // ============================================================
+    // Ελέγχει την οπτική κατάσταση (ενεργό / γκριζαρισμένο) των πεδίων
+    // ρυθμίσεων trailing stop (μέθοδος, trail %, activation % κ.λπ.).
+    //
+    // Λογική:
+    //   Αν το "use_trailing_stop" toggle είναι checked (ενεργό):
+    //     → opacity: 1      = κανονική εμφάνιση, πλήρως ορατό
+    //     → pointerEvents: auto = ο χρήστης μπορεί να κλικάρει τα πεδία
+    //   Αν είναι unchecked (ανενεργό):
+    //     → opacity: 0.6    = γκριζαρισμένη/διαφανής εμφάνιση (disabled look)
+    //     → pointerEvents: none = ο χρήστης ΔΕΝ μπορεί να κλικάρει τα πεδία
+    //
+    // Αυτή η προσέγγιση είναι καλύτερη από disabled=true γιατί τα πεδία
+    // συνεχίζουν να υπάρχουν στο DOM και να στέλνουν τιμές στο form.
+    function toggleTrailingFields() {
+        const fields = document.getElementById('trailing-fields');
+        const checkbox = document.getElementById('use_trailing_stop');
+        if (fields && checkbox) {
+            fields.style.opacity = checkbox.checked ? '1' : '0.6';
+            fields.style.pointerEvents = checkbox.checked ? 'auto' : 'none';
+        }
+    }
+
+    // ============================================================
+    // DOMContentLoaded — Αρχικοποίηση Trailing Stop Toggle
+    // ============================================================
+    // Τρέχει ΜΕΤΑ την πλήρη φόρτωση του DOM (όλα τα HTML elements είναι έτοιμα).
+    // Ψάχνει το trailing stop checkbox και:
+    //   1. Συνδέει το 'change' event στην toggleTrailingFields()
+    //      → κάθε φορά που ο χρήστης κάνει κλικ στο toggle, καλείται η function
+    //   2. Καλεί αμέσως toggleTrailingFields() για να θέσει τη ΣΩΣΤΗ αρχική
+    //      οπτική κατάσταση βάσει του αν ήταν checked ή όχι κατά το φόρτωμα
+    //      (η checked/unchecked κατάσταση ορίζεται από τον Flask server μέσω Jinja2)
+    document.addEventListener('DOMContentLoaded', function() {
+        const trailingCheckbox = document.getElementById('use_trailing_stop');
+        if (trailingCheckbox) {
+            trailingCheckbox.addEventListener('change', toggleTrailingFields);
+            toggleTrailingFields();
+        }
+    });
+
+    // ============================================================
+    // Default Backtest Dates (Αυτόματες Ημερομηνίες)
+    // ============================================================
+    // Ορίζει αυτόματα τις ημερομηνίες έναρξης/λήξης της φόρμας backtest:
+    //   today         = η σημερινή ημερομηνία
+    //   thirtyDaysAgo = σήμερα μείον 30 μέρες
+    //   new Date(new Date().setDate(...)) = δημιουργεί νέο Date object 30 μέρες πριν
+    //   valueAsDate   = ορίζει απευθείας ημερομηνία σε date input (αποφεύγει string formatting)
+    //
+    // Αποτέλεσμα: ανοίγοντας το Backtest tab, τα πεδία έχουν ήδη
+    // γεμίσει με reasonable defaults (τελευταίος μήνας).
+    const today = new Date();
+    const thirtyDaysAgo = new Date(new Date().setDate(today.getDate() - 30));
+    document.getElementById('btEnd').valueAsDate = today;
+    document.getElementById('btStart').valueAsDate = thirtyDaysAgo;
+
+    // ============================================================
+    // restoreDefaults(indName)
+    // ============================================================
+    // Επαναφέρει τις παραμέτρους ενός δείκτη στις αρχικές default τιμές.
+    // Καλείται από το κουμπί "Default" δίπλα σε κάθε δείκτη.
+    //
+    // Παράμετρος:
+    //   indName: το όνομα του δείκτη (π.χ. "RSI", "MACD", "BOLLINGER_BANDS")
+    //
+    // Λογική:
+    //   1. Αν δεν υπάρχει ο δείκτης στο DEFAULT_CONFIGS → βγες (return)
+    //   2. Object.entries() = μετατρέπει το config dict σε array [key, value] pairs
+    //   3. Για κάθε ζεύγος:
+    //      - Παραλείπει 'enabled' (το toggle είναι ξεχωριστό element)
+    //      - Παραλείπει 'signal_options' (είναι metadata, όχι input)
+    //      - Βρίσκει το input με id="input_{indName}_{key}" και βάζει τη default τιμή
+    //   Παράδειγμα: για RSI με key="period", ψάχνει id="input_RSI_period"
+    function restoreDefaults(indName) {
+        if (!DEFAULT_CONFIGS[indName]) return;
+        for (const [key, value] of Object.entries(DEFAULT_CONFIGS[indName])) {
+            if (key !== 'enabled' && key !== 'signal_options') {
+                const el = document.getElementById(`input_${indName}_${key}`);
+                if (el) el.value = value;
+            }
+        }
+    }
+
+    // ============================================================
+    // syncStrategy()
+    // ============================================================
+    // Διαβάζει ΟΛΗ τη φόρμα #strategyForm και στέλνει POST στο /update_strategy.
+    // Είναι async (επιστρέφει Promise) ώστε άλλες functions να κάνουν await.
+    //
+    // Ειδική διαχείριση checkboxes:
+    //   Το HTML FormData ΔΕΝ συμπεριλαμβάνει αυτόματα τα unchecked checkboxes
+    //   (αφού δεν έχουν τιμή όταν δεν είναι checked). Αυτό δημιουργεί πρόβλημα
+    //   γιατί ο server δεν ξέρει αν ο δείκτης είναι OFF ή απλώς δεν εστάλη.
+    //   Λύση: querySelectorAll('.ind-checkbox') βρίσκει ΟΛΑ τα indicator checkboxes
+    //   και βάζει ρητά 'true' ή 'false' ανεξάρτητα αν είναι checked ή όχι.
+    //
+    // Χρησιμοποιείται πριν από:
+    //   - Εκκίνηση bot (toggleBot)
+    //   - Εκτέλεση backtest
+    //   - Πάτημα "Αποθήκευση Ρυθμίσεων"
+    async function syncStrategy() {
+        const form = document.getElementById('strategyForm');
+        const stratData = new FormData(form);
+        document.querySelectorAll('.ind-checkbox').forEach(chk => stratData.set(chk.name, chk.checked ? 'true' : 'false'));
+        await fetch('/update_strategy', { method: 'POST', body: stratData });
+    }
+
+    // ============================================================
+    // toggleBot(action)
+    // ============================================================
+    // Εκκινεί ή σταματά το trading bot.
+    //
+    // action = 'start':
+    //   1. await syncStrategy() → αποθηκεύει πρώτα τις ρυθμίσεις (σημαντικό!)
+    //   2. Στέλνει POST /toggle_bot με action=start και τον αριθμό ζευγών
+    //   3. Alert επιβεβαίωσης
+    //
+    // action = 'stop':
+    //   1. Στέλνει POST /toggle_bot με action=stop (χωρίς syncStrategy)
+    //   2. Alert επιβεβαίωσης
+    //
+    // Σημείωση: το pair_count παίρνεται από το input #pairCount του Control Center tab
+    async function toggleBot(action) {
+        if (action === 'start') await syncStrategy();
+        const formData = new FormData();
+        formData.append('action', action);
+        formData.append('pair_count', document.getElementById('pairCount').value);
+        await fetch('/toggle_bot', { method: 'POST', body: formData });
+        alert(action === 'start' ? "Το Bot ΞΕΚΙΝΗΣΕ!" : "Το Bot ΣΤΑΜΑΤΗΣΕ!");
+    }
+
+    // ============================================================
+    // sendAction(endpoint, data)
+    // ============================================================
+    // Generic helper για αποστολή εντολών στον server μέσω POST.
+    // Χρησιμοποιείται από τα 3 emergency buttons και το log level dropdown.
+    //
+    // Ειδικές περιπτώσεις ΠΡΙΝ την αποστολή (confirm dialogs):
+    //   /shutdown   → confirm: "θα τερματιστεί το πρόγραμμα"
+    //   /force_exit → confirm: "θα πουληθούν όλες οι θέσεις"
+    //   Αν ο χρήστης πατήσει "Cancel" → return (ακύρωση, δεν στέλνεται τίποτα)
+    //
+    // Try/Catch:
+    //   Αν το response έχει .msg ή .status → alert με το μήνυμα
+    //   Αν το /shutdown πετύχει: ο server ΚΛΕΙΝΕΙ και δεν μπορεί να απαντήσει
+    //     → η fetch αποτυγχάνει με network error → αυτό είναι ΑΝΑΜΕΝΟΜΕΝΟ
+    //     → το catch εμφανίζει "✅ Κλειστό επιτυχώς" αντί για error
+    //   Για άλλα endpoints: πραγματικό σφάλμα → "❌ σφάλμα επικοινωνίας"
+    async function sendAction(endpoint, data = {}) {
+        if (endpoint === '/shutdown' && !confirm("ΕΠΙΒΕΒΑΙΩΣΗ: Θα τερματιστεί εντελώς το πρόγραμμα!")) return;
+        if (endpoint === '/force_exit' && !confirm("ΕΠΙΒΕΒΑΙΩΣΗ: Θα πουληθούν όλες οι ανοιχτές θέσεις με Market order!")) return;
+
+        try {
+            const formData = new FormData();
+            for (const key in data) formData.append(key, data[key]);
+
+            const res = await fetch(endpoint, { method: 'POST', body: formData });
+            const json = await res.json();
+            alert(json.msg || json.status);
+        } catch (error) {
+            if (endpoint === '/shutdown') {
+                alert("✅ Το σύστημα έκλεισε επιτυχώς.");
+            } else {
+                alert("❌ Υπήρξε σφάλμα επικοινωνίας. Δες την καρτέλα των Logs.");
+            }
+        }
+    }
+
+    // ============================================================
+    // Log Interval — Καθαρισμός παλιών loops
+    // ============================================================
+    // Πρόβλημα: αν η σελίδα επαναφορτωθεί μερικώς (π.χ. Flask hot-reload)
+    // ή αν αυτό το script εκτελεστεί ξανά, θα δημιουργηθεί ΔΕΥΤΕΡΟΣ setInterval
+    // που τρέχει παράλληλα με τον πρώτο → διπλές κλήσεις /get_logs κάθε 2s.
+    // Λύση: αποθηκεύεται το interval ID στο window (global) object.
+    //   Αν υπάρχει ήδη → clearInterval() σκοτώνει τον παλιό loop πριν δημιουργηθεί νέος.
+    if (window.logInterval) {
+        clearInterval(window.logInterval);
+    }
+
+    // ============================================================
+    // fetchAndRenderLogs()
+    // ============================================================
+    // Κάνει GET /get_logs, παίρνει τα logs και τα εμφανίζει στο terminal.
+    // Έχει smart auto-scroll logic και pause-on-scroll συμπεριφορά.
+    //
+    // Smart scroll logic:
+    //   isAtBottom: ελέγχει αν ο χρήστης είναι κοντά στο κάτω μέρος (με ανοχή 50px).
+    //   Υπολογισμός: (scrollHeight - scrollTop) - clientHeight < 50
+    //     scrollHeight = συνολικό ύψος περιεχομένου (ορατό + κρυφό)
+    //     scrollTop    = πόσα pixels έχουν κάνει scroll από πάνω
+    //     clientHeight = ύψος του ορατού container
+    //     Αν η διαφορά < 50px → είμαστε ουσιαστικά στο τέλος
+    //
+    // Αν isAtBottom = true:
+    //   - Κάνει fetch /get_logs
+    //   - Ενημερώνει το innerText με τα νέα logs
+    //   - Κάνει scroll στο τέλος (scrollTop = scrollHeight)
+    //   - Badge: πράσινο "Auto-refresh Active"
+    //
+    // Αν isAtBottom = false (ο χρήστης έχει scrollάρει προς τα πάνω):
+    //   - ΔΕΝ κάνει καμία κλήση στον server (δεν κάνει fetch)
+    //   - Badge: κίτρινο "⏸ Paused (Scroll down to resume)"
+    //   Έτσι ο χρήστης μπορεί να διαβάσει παλιά logs χωρίς να "πηδάει" η οθόνη.
+    async function fetchAndRenderLogs() {
+        const logBox = document.getElementById('logViewer');
+        const statusBadge = document.getElementById('logStatusBadge');
+        if (!logBox) return;
+
+        // Υπολογισμός αν ο χρήστης βρίσκεται κάτω-κάτω (με ανοχή 50 pixels)
+        const isAtBottom = Math.abs((logBox.scrollHeight - logBox.scrollTop) - logBox.clientHeight) < 50;
+
+        if (isAtBottom) {
+            try {
+                // Κάνουμε κλήση ΜΟΝΟ όταν είμαστε στο τέλος
+                const res = await fetch('/get_logs');
+                const data = await res.json();
+
+                logBox.innerText = data.logs;
+
+                // Τον αναγκάζουμε να μείνει καρφωμένος κάτω
+                logBox.scrollTop = logBox.scrollHeight;
+
+                if (statusBadge) {
+                    statusBadge.className = "badge bg-success";
+                    statusBadge.innerText = "Auto-refresh Active";
+                }
+            } catch (e) {
+                console.error("Σφάλμα φόρτωσης logs:", e);
+            }
+        } else {
+            // Ο χρήστης έχει σκρολάρει προς τα πάνω! Παγώνουμε τα πάντα.
+            if (statusBadge) {
+                statusBadge.className = "badge bg-warning text-dark";
+                statusBadge.innerText = "⏸ Paused (Scroll down to resume)";
+            }
+        }
+    }
+
+    // ============================================================
+    // Log Auto-Refresh — setInterval + πρώτη άμεση εκτέλεση
+    // ============================================================
+    // Εκτέλεση κάθε 2 δευτερόλεπτα
+    // Αποθηκεύεται στο window.logInterval ώστε να μπορεί να ακυρωθεί
+    // αν χρειαστεί (βλ. clearInterval παραπάνω).
+    window.logInterval = setInterval(fetchAndRenderLogs, 2000);
+
+    // Αρχική φόρτωση μόλις φορτώσει η σελίδα
+    // setTimeout 500ms: μικρή καθυστέρηση ώστε το DOM να έχει οριστεί πλήρως
+    // και ο server να είναι έτοιμος να απαντήσει (αποφυγή race condition)
+    setTimeout(fetchAndRenderLogs, 500);
+
+    // ============================================================
+    // Strategy Form Submit
+    // ============================================================
+    // Intercepts το default HTML form submit (που θα έκανε page reload).
+    // e.preventDefault() → ακυρώνει το default browser behavior
+    // Καλεί syncStrategy() (async) και εμφανίζει alert επιβεβαίωσης.
+    document.getElementById('strategyForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        await syncStrategy();
+        alert("Οι ρυθμίσεις αποθηκεύτηκαν επιτυχώς!");
+    });
+
+    // ============================================================
+    // cancelBacktest()
+    // ============================================================
+    // Στέλνει POST /cancel_backtest για να διακόψει εν εξελίξει backtest.
+    // Ενημερώνει αμέσως το κουμπί σε "Ακύρωση..." και το disable
+    // ώστε να μην πατηθεί δεύτερη φορά κατά λάθος (idempotency protection).
+    // Global μεταβλητή για να μπορούμε να κόβουμε το request
+    let backtestController = null;
+
+    // ============================================================
+    // cancelBacktest()
+    // ============================================================
+    async function cancelBacktest() {
+        document.getElementById('btnCancelBacktest').innerText = "Ακύρωση...";
+        document.getElementById('btnCancelBacktest').disabled = true;
+
+        // 1. Στέλνει το σήμα στην Python να σταματήσει
+        await fetch('/cancel_backtest', { method: 'POST' });
+
+        // 2. ΣΚΟΤΩΝΕΙ την αναμονή του browser ακαριαία!
+        if (backtestController) {
+            backtestController.abort();
+        }
+
+        alert("Η ακύρωση εστάλη. Το backtest διακόπηκε.");
+    }
+
+    // ============================================================
+    // Backtest Form Submit
+    // ============================================================
+    // Κύριος event handler για εκτέλεση backtest.
+    //
+    // Βήματα εκτέλεσης:
+    //   1. e.preventDefault() → αποτρέπει page reload
+    //   2. syncStrategy()     → αποθηκεύει τρέχουσες ρυθμίσεις (ώστε το backtest
+    //                           να τρέξει με αυτές που βλέπει ο χρήστης στο UI)
+    //   3. UI ενημέρωση:
+    //      - Κουμπί Run: "ΥΠΟΛΟΓΙΣΜΟΣ..." + disabled (δεν μπορεί να ξανατρέξει)
+    //      - Κουμπί Cancel: εμφανίζεται (display: block) + ενεργό
+    //   4. POST /backtest με start_date, end_date, pair_count
+    //      (η κλήση είναι async: ΠΕΡΙΜΕΝΕΙ για το response πριν συνεχίσει)
+    //   5. Επαναφορά UI: Run button ξανά ενεργό, Cancel button κρύβεται
+    //   6. Αν data.error → alert και return (δεν εμφανίζει αποτελέσματα)
+    //   7. Εμφάνιση #backtestResults (αρχικά display:none)
+    //   8. Ενημέρωση μηνύματος επιτυχίας (#resPairsFound)
+    //   9. Αποθήκευση pair_details και history στο window (global) object:
+    //      → window.backtestPairDetails: τα λεπτομερή stats/chart data ανά ζεύγος
+    //      → window.backtestHistory: πλήρες ιστορικό trades (για BUY/SELL markers)
+    //      Αποθηκεύονται globally ώστε να είναι διαθέσιμα αργότερα στις
+    //      renderPairDetails() και drawChart() χωρίς να χρειαστεί νέο fetch.
+    //  10. Reset dropdown ζευγών και κρύψιμο chart section
+    //  11. ΠΡΟΣΟΧΗ: το dropdown γεμίζει ΔΥΟ ΦΟΡΕΣ — μία μέσα στο if (data.pairs_summary)
+    //      και μία ξανά αμέσως μετά χωρίς guard. Αυτό είναι πιθανώς ένα bug
+    //      που δημιουργεί διπλές εγγραφές στο dropdown.
+    //  12. Γέμισμα πίνακα ιστορικού trades (tradeHistoryBody):
+    //      - Κάθε trade γίνεται <tr> με symbol, entry/exit time, τιμές, P&L, reason
+    //      - pnlClass: pnl-positive (πράσινο) αν κέρδος, pnl-negative (κόκκινο) αν ζημία
+    document.getElementById('backtestForm').addEventListener('submit', async function(e) {
+        e.preventDefault();
+        await syncStrategy();
+
+        const btn = document.getElementById('btnRunBacktest');
+        const cancelBtn = document.getElementById('btnCancelBacktest');
+
+        // Κλείδωμα UI
+        btn.innerText = "ΥΠΟΛΟΓΙΣΜΟΣ..."; btn.disabled = true;
+        cancelBtn.style.display = 'block';
+        cancelBtn.innerText = "⏹ ΑΚΥΡΩΣΗ"; cancelBtn.disabled = false;
+
+        // Δημιουργούμε τον ελεγκτή διακοπής
+        backtestController = new AbortController();
+
+        const formData = new FormData(this);
+        formData.append('pair_count', document.getElementById('pairCountBacktest').value);
+
+        try {
+            // Στέλνουμε το signal μαζί με το request
+            const res = await fetch('/backtest', {
+                method: 'POST',
+                body: formData,
+                signal: backtestController.signal
+            });
+            const data = await res.json();
+
+            if(data.error) { alert(data.error); return; }
+
+            document.getElementById('backtestResults').style.display = 'block';
+
+            // Ενημέρωση μόνο του γενικού μηνύματος επιτυχίας
+            document.getElementById('resPairsFound').innerText = data.msg || `Ολοκληρώθηκε με επιτυχία`;
+
+            // Αποθήκευση δεδομένων για τα γραφήματα
+            window.backtestPairDetails = data.pair_details || {};
+            window.backtestHistory = data.history || [];
+
+            const dropdown = document.getElementById('pairDetailsDropdown');
+            dropdown.innerHTML = '<option value="">-- Επιλογή Ζεύγους --</option>';
+            document.getElementById('pairDetailsDisplay').style.display = 'none';
+
+            // Γέμισμα dropdown με τα ζεύγη
+            if (data.pairs_summary) {
+                data.pairs_summary.forEach(p => {
+                    dropdown.innerHTML += `<option value="${p.symbol}">${p.symbol} (${p.profit_pct}%)</option>`;
+                });
+            }
+
+            // Γέμισμα πίνακα ιστορικού trades
+            const histBody = document.getElementById('tradeHistoryBody');
+            histBody.innerHTML = '';
+            if (data.history.length === 0) {
+                histBody.innerHTML = '<tr><td colspan="7" class="text-muted py-3">Καμία συναλλαγή στην επιλεγμένη περίοδο</td></tr>';
+            } else {
+                data.history.forEach(trade => {
+                    const pnlClass = trade.pnl_pct >= 0 ? 'pnl-positive' : 'pnl-negative';
+                    histBody.innerHTML += `
+                        <tr>
+                            <td class="fw-bold">${trade.symbol}</td>
+                            <td class="small text-muted">${trade.entry_time}</td>
+                            <td>${trade.entry_price}$</td>
+                            <td class="small text-muted">${trade.exit_time}</td>
+                            <td>${trade.exit_price}$</td>
+                            <td class="${pnlClass}">${trade.pnl_pct}%</td>
+                            <td><span class="badge bg-dark">${trade.reason}</span></td>
+                        </tr>`;
+                });
+            }
+
+        } catch (error) {
+            if (error.name === 'AbortError') {
+                console.warn("⚠️ Η διαδικασία αναμονής στο UI διακόπηκε από τον χρήστη.");
+            } else {
+                console.error("❌ Σφάλμα ή Timeout:", error);
+                alert("Υπήρξε σφάλμα ή καθυστέρηση στο δίκτυο.");
+            }
+        } finally {
+            // Το block finally εκτελείται ΠΑΝΤΑ, είτε πετύχει, είτε βγάλει error, είτε γίνει abort.
+            // Άρα τα κουμπιά θα ξεκλειδώνουν ΠΑΝΤΑ!
+            btn.innerText = "🔬 ΕΚΤΕΛΕΣΗ BACKTEST";
+            btn.disabled = false;
+            cancelBtn.style.display = 'none';
+            cancelBtn.innerText = "⏹ ΑΚΥΡΩΣΗ";
+            backtestController = null; // Μηδενισμός
+        }
+    });
+
+    // ============================================================
+    // renderPairDetails(symbol)
+    // ============================================================
+    // Εμφανίζει το πλήρες performance dashboard για ένα συγκεκριμένο ζεύγος.
+    // Καλείται από το onchange του dropdown ζευγών.
+    //
+    // Παράμετρος:
+    //   symbol: string, π.χ. "BTCUSDC", "ETHUSDC"
+    //
+    // Βήματα:
+    //   1. Guard: αν δεν υπάρχει επιλογή ή δεδομένα → κρύβει το display section
+    //   2. Εξάγει το details object από window.backtestPairDetails[symbol]
+    //   3. details.metrics (m): το Advanced Metrics object με:
+    //        net_profit, total_return_pct, cagr, max_drawdown,
+    //        sharpe_ratio, sortino_ratio, win_rate, profit_factor,
+    //        avg_holding_hours
+    //   4. Μετράει BUY/SELL trades απευθείας από window.backtestHistory
+    //      (φιλτράρει με trade.symbol === symbol)
+    //      actualBuys: αριθμός εισόδων (κάθε trade = 1 BUY)
+    //      actualSells: αριθμός εξόδων (μόνο αν έχει exit_time → κλεισμένο)
+    //   5. Δημιουργεί HTML badges για κάθε ενεργό δείκτη (badge bg-primary)
+    //   6. Χτίζει και εισάγει HTML dashboard 3 στηλών:
+    //      Στήλη 1 (πράσινη κάρτα "Κερδοφορία"):
+    //        - Καθαρό Κέρδος ($): πράσινο αν >=0, κόκκινο αν <0
+    //        - Απόδοση (%): πράσινο/κόκκινο
+    //        - CAGR (%): Compound Annual Growth Rate
+    //      Στήλη 2 (κόκκινη κάρτα "Ρίσκο"):
+    //        - Max Drawdown: πάντα κόκκινο (είναι αρνητικό μέτρο)
+    //        - Sharpe Ratio: πράσινο αν >1 (καλό), σκούρο αν <=1
+    //        - Sortino Ratio: πράσινο αν >1
+    //      Στήλη 3 (μπλε κάρτα "Ποιότητα"):
+    //        - Win Rate: πράσινο αν >=50%
+    //        - Profit Factor: αναλογία κέρδους/ζημίας
+    //        - Μέσος Χρόνος Κατοχής (ώρες)
+    //   7. Καλεί drawChart(symbol, details) για το Plotly γράφημα
+    function renderPairDetails(symbol) {
+        const displayBox = document.getElementById('pairDetailsDisplay');
+        const statsBox = document.getElementById('pairStatsBox');
+        
+        if (!symbol || !window.backtestPairDetails || !window.backtestPairDetails[symbol]) {
+            displayBox.style.display = 'none';
+            return;
+        }
+        
+        const details = window.backtestPairDetails[symbol];
+        displayBox.style.display = 'block';
+
+        const m = details.metrics; // Τα Advanced Metrics αυτού του ζεύγους!
+
+        // Μέτρηση trades από το global history (πιο αξιόπιστο από το details object)
+        let actualBuys = 0;
+        let actualSells = 0;
+        if (window.backtestHistory) {
+            window.backtestHistory.forEach(trade => {
+                if (trade.symbol === symbol) {
+                    actualBuys++;
+                    if (trade.exit_time) actualSells++;
+                }
+            });
+        }
+
+        // Δημιουργία HTML badges για κάθε ενεργό δείκτη
+        let indicatorsBadges = '';
+        if (details.indicators && details.indicators.length > 0) {
+            details.indicators.forEach(ind => {
+                indicatorsBadges += `<span class="badge bg-primary me-1">${ind}</span>`;
+            });
+        } else {
+            indicatorsBadges = '<span class="text-muted">Κανένας ενεργός δείκτης</span>';
+        }
+
+        // --- Χτίζουμε δυναμικά το Dashboard 3 στηλών ΕΔΩ ---
+        // Κάθε κάρτα χρωματίζεται βάσει κατηγορίας (πράσινο/κόκκινο/μπλε)
+        // Κάθε τιμή χρωματίζεται inline βάσει αν είναι καλή ή κακή
+        statsBox.innerHTML = `
+            <div class="row mb-3">
+                <div class="col-12">
+                    <h5 class="fw-bold text-dark border-bottom pb-2">Ανάλυση Απόδοσης: ${symbol}</h5>
+                    <p class="small text-muted mb-2"><b>Δείκτες:</b> ${indicatorsBadges} | <b>Λογική:</b> ${details.logic_used} | <b>Signals:</b> ${actualBuys} BUY / ${actualSells} SELL</p>
+                </div>
+            </div>
+
+            <div class="row g-3">
+                <div class="col-md-4">
+                    <div class="card h-100 border-success border-opacity-25 bg-success bg-opacity-10">
+                        <div class="card-header bg-success text-white fw-bold py-2 px-3">💰 Κερδοφορία</div>
+                        <ul class="list-group list-group-flush small">
+                            <li class="list-group-item d-flex justify-content-between bg-transparent px-2"><span>Καθαρό Κέρδος:</span> <strong class="${m.net_profit >= 0 ? 'text-success' : 'text-danger'}">$${m.net_profit}</strong></li>
+                            <li class="list-group-item d-flex justify-content-between bg-transparent px-2"><span>Απόδοση:</span> <strong class="${m.total_return_pct >= 0 ? 'text-success' : 'text-danger'}">${m.total_return_pct}%</strong></li>
+                            <li class="list-group-item d-flex justify-content-between bg-transparent px-2"><span>CAGR:</span> <strong>${m.cagr}%</strong></li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="col-md-4">
+                    <div class="card h-100 border-danger border-opacity-25 bg-danger bg-opacity-10">
+                        <div class="card-header bg-danger text-white fw-bold py-2 px-3">⚠️ Ρίσκο</div>
+                        <ul class="list-group list-group-flush small">
+                            <li class="list-group-item d-flex justify-content-between bg-transparent px-2"><span>Max Drawdown:</span> <strong class="text-danger">-${m.max_drawdown}%</strong></li>
+                            <li class="list-group-item d-flex justify-content-between bg-transparent px-2"><span>Sharpe Ratio:</span> <strong class="${m.sharpe_ratio > 1 ? 'text-success' : 'text-dark'}">${m.sharpe_ratio}</strong></li>
+                            <li class="list-group-item d-flex justify-content-between bg-transparent px-2"><span>Sortino Ratio:</span> <strong class="${m.sortino_ratio > 1 ? 'text-success' : 'text-dark'}">${m.sortino_ratio}</strong></li>
+                        </ul>
+                    </div>
+                </div>
+
+                <div class="col-md-4">
+                    <div class="card h-100 border-primary border-opacity-25 bg-primary bg-opacity-10">
+                        <div class="card-header bg-primary text-white fw-bold py-2 px-3">🎯 Ποιότητα</div>
+                        <ul class="list-group list-group-flush small">
+                            <li class="list-group-item d-flex justify-content-between bg-transparent px-2"><span>Win Rate:</span> <strong class="${m.win_rate >= 50 ? 'text-success' : 'text-danger'}">${m.win_rate}%</strong></li>
+                            <li class="list-group-item d-flex justify-content-between bg-transparent px-2"><span>Profit Factor:</span> <strong>${m.profit_factor}</strong></li>
+                            <li class="list-group-item d-flex justify-content-between bg-transparent px-2"><span>Μέσος Χρόνος:</span> <strong>${m.avg_holding_hours} ώρες</strong></li>
+                        </ul>
+                    </div>
+                </div>
+            </div>
+        `;
+
+        // Κλήση για σχεδίαση του γραφήματος (candlestick + overlays + subplots + markers)
+        drawChart(symbol, details);
+    }
+
+    // ============================================================
+    // drawChart(symbol, details)
+    // ============================================================
+    // Σχεδιάζει το πλήρες Plotly γράφημα για ένα ζεύγος.
+    //
+    // Δομή γραφήματος (multi-panel layout):
+    //   Panel 1 (y1 - κυρίως, πάνω): Candlestick + Overlays (MA/BB) + BUY/SELL markers
+    //   Panel 2 (y2, αν υπάρχει): Momentum indicators (MACD, RSI)
+    //   Panel 3 (y3, αν υπάρχει): Oscillators (Stoch, CCI, Williams, MFI, ROC)
+    //   Panel 4 (y4, αν υπάρχει): Volume & Strength (OBV, CMF, ADX)
+    //
+    // Βήματα:
+    //   1. Guard: αν δεν υπάρχουν chart_data → εμφανίζει μήνυμα
+    //   2. Candlestick trace: πράσινο για ανοδικά κεριά, κόκκινο για καθοδικά
+    //   3. Overlays (γραμμές πάνω στο candlestick, y1):
+    //      - Φιλτράρει BBB (Bollinger Bandwidth) και BBP (BB Percent) που
+    //        δεν έχουν νόημα ως overlay (είναι bounded oscillators)
+    //   4. Ταξινόμηση oscillators σε 3 ομάδες:
+    //      momentumTraces  : MACD*, RSI*
+    //      oscillatorTraces: STOCH*, CCI*, WILL*, MFI*, ROC*
+    //      volumeTraces    : OBV*, CMF*, ADX*, DMP*, DMN*
+    //      Χρήση .toUpperCase() + .includes() για case-insensitive matching
+    //      Ειδική μεταχείριση MACDh: bar chart με πράσινο/κόκκινο ανά τιμή
+    //   5. activeSubplots: μόνο οι ομάδες που έχουν τουλάχιστον 1 trace
+    //   6. Ανάθεση yaxis: κάθε subplot παίρνει y2, y3, y4 δυναμικά με index+2
+    //   7. BUY/SELL markers από window.backtestHistory:
+    //      - triangle-up  (μπλε)  για ENTRY (BUY)
+    //      - triangle-down (κόκκινο) για EXIT (SELL)
+    //      Και τα δύο ανήκουν στο y1 (κυρίως γράφημα τιμής)
+    //   8. Δυναμικός υπολογισμός ύψους γραφήματος σε pixels:
+    //      MAIN_CHART_PX = 800px σταθερά για το κυρίως γράφημα
+    //      SUBPLOT_PX    = 350px ανά subplot
+    //      GAP_PX        = 120px κενό μεταξύ panels
+    //      totalHeightPx = MAIN + (numSubplots * SUBPLOT) + (numSubplots * GAP)
+    //   9. Μετατροπή pixels → ποσοστά (0-1) για Plotly domain:
+    //      gapPct        = GAP_PX / totalHeightPx
+    //      subHeightPct  = SUBPLOT_PX / totalHeightPx
+    //      mainStartPct  = πού ξεκινά το κυρίως γράφημα (subplots πρώτα από κάτω)
+    //      Τα subplots στοιβάζονται ΑΠΟ ΚΑΤΩ ΠΡΟΣ ΤΑ ΠΑΝΩ (positionFromBottom)
+    //  10. Layout: legend κάθετα στα δεξιά (orientation:'v', x:1.02)
+    //      xaxis: type:'category' (χρησιμοποιεί τα date strings ως κατηγορίες,
+    //             αποφεύγει κενά για weekends), rangeslider: false (δεν εμφανίζεται)
+    //  11. Plotly.purge: καθαρίζει παλιό γράφημα από τον container
+    //      Plotly.newPlot: σχεδιάζει το νέο (responsive: true = προσαρμόζεται στο πλάτος)
+    function drawChart(symbol, details) {
+        const cData = details.chart_data;
+        if (!cData) {
+            document.getElementById('plotlyChartContainer').innerHTML = "<p class='text-muted text-center mt-5'>Δεν υπάρχουν δεδομένα γραφήματος.</p>";
+            return;
+        }
+
+        const plotData = [];
+
+        // --- Trace 1: Candlestick (OHLC) ---
+        // increasing/decreasing: χρωματισμός ανοδικών/καθοδικών κεριών
+        // yaxis: 'y1' = ανήκει στον κυρίως άξονα τιμής
+        plotData.push({
+            x: cData.dates, open: cData.open, high: cData.high, low: cData.low, close: cData.close,
+            type: 'candlestick', name: 'Τιμή (Candles)',
+            increasing: {line: {color: '#198754'}}, decreasing: {line: {color: '#dc3545'}},
+            yaxis: 'y1'
+        });
+
+        // --- Traces 2+: Overlays (MA, EMA, Bollinger Bands κ.λπ.) ---
+        // Εμφανίζονται πάνω στο candlestick (ίδιος y1 άξονας τιμής)
+        // BBB (Bandwidth) και BBP (Percent) εξαιρούνται — δεν έχουν την ίδια κλίμακα
+        if (cData.overlays) {
+            for (const [indName, values] of Object.entries(cData.overlays)) {
+                if (indName.includes('BBB') || indName.includes('BBP')) continue;
+                plotData.push({
+                    x: cData.dates, y: values, type: 'scatter', mode: 'lines', name: indName,
+                    line: { width: 1.5 }, yaxis: 'y1', hoverinfo: 'name+y'
+                });
+            }
+        }
+
+        // --- Ταξινόμηση Oscillators σε 3 ομάδες για ξεχωριστά panels ---
+        // Κάθε ομάδα = ξεχωριστό subplot με δικό του y-axis
+        const momentumTraces = [];    // MACD, RSI
+        const oscillatorTraces = [];  // Stochastic, CCI, Williams, MFI, ROC
+        const volumeTraces = [];      // OBV, CMF, ADX, +DI, -DI
+
+        if (cData.oscillators) {
+            for (const [indName, values] of Object.entries(cData.oscillators)) {
+                let chartType = 'scatter';
+                let chartMode = 'lines';
+                let markerStyle = {};
+                
+                // Ειδική μεταχείριση MACD histogram: bar chart με δυναμικό χρωματισμό
+                // Κάθε bar χρωματίζεται ξεχωριστά: πράσινο αν τιμή >= 0, κόκκινο αν < 0
+                if (indName.includes('MACDh')) {
+                    chartType = 'bar';
+                    markerStyle = { color: values.map(v => v >= 0 ? '#198754' : '#dc3545') };
+                }
+
+                const trace = {
+                    x: cData.dates, y: values, type: chartType, mode: chartMode, name: indName,
+                    line: { width: 1.5 }, marker: markerStyle, hoverinfo: 'name+y'
+                };
+
+                // .toUpperCase() για case-insensitive σύγκριση
+                // .includes() για να πιάσει παραλλαγές (π.χ. MACD_12_26, RSI_14)
+                const nameUp = indName.toUpperCase();
+
+                if (nameUp.includes('MACD') || nameUp.includes('RSI')) {
+                    momentumTraces.push(trace);
+                } 
+                else if (nameUp.includes('STOCH') || nameUp.includes('CCI') || nameUp.includes('WILL') || nameUp.includes('MFI') || nameUp.includes('ROC')) {
+                    oscillatorTraces.push(trace);
+                } 
+                else if (nameUp.includes('OBV') || nameUp.includes('CMF') || nameUp.includes('ADX') || nameUp.includes('DMP') || nameUp.includes('DMN')) {
+                    volumeTraces.push(trace);
+                }
+            }
+        }
+
+        // --- activeSubplots: μόνο οι ομάδες με τουλάχιστον 1 trace ---
+        // Αν π.χ. δεν υπάρχει κανένα volume indicator → δεν δημιουργείται το τρίτο panel
+        const activeSubplots = [];
+        if (momentumTraces.length > 0) activeSubplots.push({traces: momentumTraces, title: 'Momentum (MACD / RSI)'});
+        if (oscillatorTraces.length > 0) activeSubplots.push({traces: oscillatorTraces, title: 'Oscillators (Stoch / CCI / Will)'});
+        if (volumeTraces.length > 0) activeSubplots.push({traces: volumeTraces, title: 'Volume & Strength (OBV / ADX)'});
+
+        const numSubplots = activeSubplots.length;
+
+        // --- Ανάθεση y-axis σε κάθε subplot ---
+        // index 0 → y2, index 1 → y3, index 2 → y4
+        // Κάθε trace της ομάδας παίρνει το ίδιο yaxis string
+        activeSubplots.forEach((sub, index) => {
+            const yaxisName = `y${index + 2}`;
+            sub.traces.forEach(t => {
+                t.yaxis = yaxisName;
+                plotData.push(t);
+            });
+        });
+
+        // --- BUY/SELL Markers από window.backtestHistory ---
+        // Φιλτράρει μόνο τα trades του συγκεκριμένου ζεύγους
+        const buyDates = []; const buyPrices = [];
+        const sellDates = []; const sellPrices = [];
+
+        if (window.backtestHistory) {
+            window.backtestHistory.forEach(trade => {
+                if (trade.symbol === symbol) {
+                    buyDates.push(trade.entry_time); buyPrices.push(trade.entry_price);
+                    sellDates.push(trade.exit_time); sellPrices.push(trade.exit_price);
+                }
+            });
+        }
+
+        // BUY marker: μπλε τρίγωνο pointing-up, ανήκει στον y1 (τιμή)
+        if (buyDates.length > 0) {
+            plotData.push({
+                x: buyDates, y: buyPrices, type: 'scatter', mode: 'markers', name: '🟢 ENTRY (BUY)',
+                marker: { symbol: 'triangle-up', color: '#0d6efd', size: 15, line: {width: 2, color: 'white'} }, yaxis: 'y1'
+            });
+        }
+        // SELL marker: κόκκινο τρίγωνο pointing-down, ανήκει στον y1 (τιμή)
+        if (sellDates.length > 0) {
+            plotData.push({
+                x: sellDates, y: sellPrices, type: 'scatter', mode: 'markers', name: '🔴 EXIT (SELL)',
+                marker: { symbol: 'triangle-down', color: '#dc3545', size: 15, line: {width: 2, color: 'white'} }, yaxis: 'y1'
+            });
+        }
+
+        // --- Υπολογισμός δυναμικού ύψους γραφήματος ---
+        // Σταθερά ύψη σε pixels για κάθε τμήμα
+        const MAIN_CHART_PX = 800;  // Κυρίως candlestick panel
+        const SUBPLOT_PX = 350;     // Κάθε indicator subplot
+        const GAP_PX = 120;         // Κενό μεταξύ panels
+
+        // Συνολικό ύψος = κύριο + (αριθμός subplots × subplot + gap)
+        const totalHeightPx = MAIN_CHART_PX + (numSubplots > 0 ? (numSubplots * SUBPLOT_PX) + (numSubplots * GAP_PX) : 0);
+        
+        // Ορίζει το CSS height του container δυναμικά
+        const container = document.getElementById('plotlyChartContainer');
+        container.style.height = totalHeightPx + "px";
+
+        // --- Μετατροπή pixels → ποσοστά 0-1 για Plotly domain ---
+        // Το Plotly domain ορίζει πού στον κάθετο άξονα εμφανίζεται κάθε panel
+        // [0, 0.3] = κάτω 30%, [0.35, 1] = πάνω 65% κ.ο.κ.
+        const gapPct = GAP_PX / totalHeightPx;
+        const subHeightPct = SUBPLOT_PX / totalHeightPx;
+        // mainStartPct: το κυρίως γράφημα ξεκινά ΠΑΝΩ ΑΠΟ ΤΑ SUBPLOTS
+        // (αν δεν υπάρχουν subplots → ξεκινά από το 0 = full height)
+        const mainStartPct = numSubplots === 0 ? 0 : numSubplots * (subHeightPct + gapPct);
+
+        // --- Layout ---
+        const layout = {
+            title: { text: `<b>Διαδραστικό Γράφημα: ${symbol}</b>`, font: {size: 18} },
+            paper_bgcolor: '#ffffff', plot_bgcolor: '#f8f9fa',
+            margin: { l: 60, r: 150, t: 50, b: 30 },
+            showlegend: true,
+            legend: {
+                // Κάθετος legend δεξιά από το γράφημα (x:1.02 = λίγο έξω από τον άξονα)
+                orientation: 'v',
+                x: 1.02,
+                y: 1,
+                bgcolor: '#f8f9fa',
+                bordercolor: '#dee2e6',
+                borderwidth: 1
+            },
+            // type:'category': χρησιμοποιεί τα date strings ως discrete κατηγορίες
+            // (αποφεύγει κενά για weekends/non-trading hours)
+            // rangeslider: false = δεν εμφανίζεται το μικρό mini-chart κάτω από τον x-axis
+            xaxis: { type: 'category', nticks: 10, showgrid: true, gridcolor: '#e9ecef', domain: [0, 1], rangeslider: { visible: false } },
+            // Κυρίως y-axis: ξεκινά από mainStartPct (πάνω από τα subplots) έως 1.0 (κορυφή)
+            yaxis: { title: 'Τιμή (USDC)', showgrid: true, gridcolor: '#e9ecef', domain: [mainStartPct, 1] }
+        };
+
+        // --- Ορισμός y-axis για κάθε subplot ---
+        // Τα subplots στοιβάζονται ΑΠΟ ΚΑΤΩ ΠΡΟΣ ΤΑ ΠΑΝΩ:
+        //   positionFromBottom: ο πρώτος (index=0) subplot είναι στο κάτω μέρος
+        //   start = positionFromBottom * (height + gap)
+        //   end   = start + height
+        activeSubplots.forEach((sub, index) => {
+            const positionFromBottom = numSubplots - 1 - index;
+            const start = positionFromBottom * (subHeightPct + gapPct);
+            const end = start + subHeightPct;
+            // yaxisKey: 'yaxis2', 'yaxis3', 'yaxis4' — αντιστοιχεί στο yaxis: 'y2' των traces
+            const yaxisKey = `yaxis${index + 2}`;
+
+            layout[yaxisKey] = {
+                title: { text: sub.title, font: {size: 13, color: '#495057'} },
+                showgrid: true, gridcolor: '#e9ecef',
+                domain: [start, end]
+            };
+        });
+
+        // Καθαρισμός παλιού γραφήματος (αποφεύγει memory leaks)
+        Plotly.purge('plotlyChartContainer');
+        // Σχεδίαση νέου γραφήματος (responsive: true = ακολουθεί το CSS width)
+        Plotly.newPlot('plotlyChartContainer', plotData, layout, {responsive: true});
+    }
+
+    // ============================================================
+    // ΠΑΓΚΟΣΜΙΑ ΥΠΕΡΚΑΛΥΨΗ PLOTLY ΓΙΑ ΑΥΤΟΜΑΤΟ DARK MODE
+    // ============================================================
+    // Πρόβλημα: η Plotly βιβλιοθήκη δεν "ξέρει" για το dark mode του site.
+    // Κάθε φορά που καλείται Plotly.newPlot() ή Plotly.react(), σχεδιάζει
+    // με τα hardcoded light mode χρώματα (π.χ. paper_bgcolor: '#ffffff').
+    //
+    // Λύση: "monkey patching" — αντικαθιστά τις αρχικές Plotly functions
+    // με νέες που κάνουν το ίδιο πράγμα ΑΛΛΑ πρώτα ελέγχουν το dark mode.
+    //
+    // wrapPlotlyMethod(methodName):
+    //   1. Αποθηκεύει την αρχική function ως originalMethod
+    //   2. Αντικαθιστά την Plotly[methodName] με νέα function
+    //   3. Η νέα function: αν dark-mode class → τροποποιεί το layout object
+    //      ΠΡΙΝ περάσει στην originalMethod
+    //   4. Τελεί return originalMethod.call(this, ...) → εκτελεί την αρχική κανονικά
+    //
+    // Dark mode layout overrides:
+    //   paper_bgcolor: '#1e1e1e' (φόντο εξωτερικά του plot)
+    //   plot_bgcolor : '#121212' (φόντο εντός των αξόνων)
+    //   title.font.color    : '#ffffff'
+    //   legend.bgcolor      : '#2d2d2d'
+    //   legend.bordercolor  : '#444444'
+    //   legend.font.color   : '#ffffff'
+    //   Για κάθε xaxis/yaxis: gridcolor, tickfont.color, title.font.color
+    //
+    // Εφαρμόζεται και στα δύο: newPlot (αρχική σχεδίαση) + react (ενημέρωση)
+    if (typeof Plotly !== 'undefined') {
+        const wrapPlotlyMethod = (methodName) => {
+            const originalMethod = Plotly[methodName];
+            Plotly[methodName] = function(div, data, layout, config) {
+                if (document.body.classList.contains('dark-mode') && layout) {
+                    layout.paper_bgcolor = '#1e1e1e';
+                    layout.plot_bgcolor = '#121212';
+                    if (layout.title && layout.title.font) layout.title.font.color = '#ffffff';
+                    if (layout.legend) {
+                        layout.legend.bgcolor = '#2d2d2d';
+                        layout.legend.bordercolor = '#444444';
+                        if (layout.legend.font) layout.legend.font.color = '#ffffff';
+                    }
+                    // Επεξεργασία ΟΛΩΝ των x/y axes (yaxis, yaxis2, xaxis κ.λπ.)
+                    Object.keys(layout).forEach(key => {
+                        if (key.startsWith('yaxis') || key.startsWith('xaxis')) {
+                            layout[key].gridcolor = '#333333';
+                            if (layout[key].tickfont) layout[key].tickfont.color = '#a0a0a0';
+                            if (layout[key].title && layout[key].title.font) layout[key].title.font.color = '#ffffff';
+                        }
+                    });
+                }
+                return originalMethod.call(this, div, data, layout, config);
+            };
+        };
+        wrapPlotlyMethod('newPlot');  // Wraps αρχική σχεδίαση
+        wrapPlotlyMethod('react');    // Wraps incremental ενημέρωση
+    }
+
+    // ============================================================
+    // DARK MODE TOGGLE — Λογική Διακόπτη και localStorage
+    // ============================================================
+    // Εκτελείται μετά το πλήρες φόρτωμα του DOM.
+    //
+    // applyTheme(isDark):
+    //   Κεντρική function που εφαρμόζει ή αφαιρεί το dark mode.
+    //   Αλλάζει:
+    //     - body class (dark-mode on/off)
+    //     - darkModeToggle.checked (το toggle switch να δείχνει σωστή κατάσταση)
+    //     - darkModeLabel HTML (☀️ Φωτεινό ή 🌙 Σκούρο)
+    //   + LIVE ενημέρωση Plotly αν υπάρχει ήδη εμφανισμένο γράφημα:
+    //     Ελέγχει αν το #plotlyChartContainer έχει .layout (= υπάρχει γράφημα)
+    //     Αν ναι: Plotly.relayout() → ενημερώνει ΜΟΝΟ τα χρώματα του layout
+    //     χωρίς να ξανασχεδιάσει όλα τα data (πολύ πιο γρήγορο από newPlot)
+    //     Ενημερώνει: backgrounds, title color, legend, gridcolors, tickfonts
+    //
+    // Αρχικοποίηση κατά φόρτωση:
+    //   Διαβάζει localStorage.getItem('theme') → αν 'dark' → applyTheme(true)
+    //   (Το base.html κάνει κιόλας το classList.add('dark-mode') νωρίς για anti-flash,
+    //    αλλά αυτός ο κώδικας ρυθμίζει επιπλέον το toggle switch και το label)
+    //
+    // Change event:
+    //   Κάθε φορά που ο χρήστης κάνει κλικ στον toggle διακόπτη:
+    //   - Αν checked → localStorage.setItem('dark') + applyTheme(true)
+    //   - Αν unchecked → localStorage.setItem('light') + applyTheme(false)
+    //   Η αποθήκευση στο localStorage εξασφαλίζει ότι η επιλογή θυμάται
+    //   ακόμα και μετά από κλείσιμο/ανοιχτό του browser.
+    document.addEventListener('DOMContentLoaded', function() {
+        const darkModeToggle = document.getElementById('darkModeToggle');
+        const darkModeLabel = document.getElementById('darkModeLabel');
+
+        function applyTheme(isDark) {
+            if (isDark) {
+                document.body.classList.add('dark-mode');
+                if (darkModeToggle) darkModeToggle.checked = true;
+                if (darkModeLabel) darkModeLabel.innerHTML = '☀️ Φωτεινό';
+            } else {
+                document.body.classList.remove('dark-mode');
+                if (darkModeToggle) darkModeToggle.checked = false;
+                if (darkModeLabel) darkModeLabel.innerHTML = '🌙 Σκούρο';
+            }
+
+            // Δυναμική ενημέρωση του Plotly αν υπάρχει ήδη ενεργό διάγραμμα στην οθόνη
+            // chartDiv.layout υπάρχει μόνο αν έχει κληθεί Plotly.newPlot() σε αυτό το div
+            const chartDiv = document.getElementById('plotlyChartContainer');
+            if (chartDiv && chartDiv.layout) {
+                const isDarkActive = document.body.classList.contains('dark-mode');
+                // Plotly.relayout: ενημερώνει μόνο τα χρώματα, χωρίς πλήρη re-render
+                const update = {
+                    paper_bgcolor: isDarkActive ? '#1e1e1e' : '#ffffff',
+                    plot_bgcolor: isDarkActive ? '#121212' : '#f8f9fa',
+                    'title.font.color': isDarkActive ? '#ffffff' : '#212529',
+                    'legend.bgcolor': isDarkActive ? '#2d2d2d' : '#f8f9fa',
+                    'legend.bordercolor': isDarkActive ? '#444444' : '#dee2e6',
+                    'legend.font.color': isDarkActive ? '#ffffff' : '#212529'
+                };
+
+                // Ενημέρωση grid και tick χρωμάτων για κάθε x/y axis δυναμικά
+                Object.keys(chartDiv.layout).forEach(key => {
+                    if (key.startsWith('yaxis') || key.startsWith('xaxis')) {
+                        update[key + '.gridcolor'] = isDarkActive ? '#333333' : '#e9ecef';
+                        update[key + '.tickfont.color'] = isDarkActive ? '#a0a0a0' : '#212529';
+                        update[key + '.title.font.color'] = isDarkActive ? '#ffffff' : '#212529';
+                    }
+                });
+                Plotly.relayout(chartDiv, update);
+            }
+        }
+
+        // Έλεγχος υπάρχουσας προτίμησης κατά το φόρτωμα
+        const savedTheme = localStorage.getItem('theme');
+        if (savedTheme === 'dark') {
+            applyTheme(true);
+        }
+
+        // Event listener για τον toggle διακόπτη dark mode
+        if (darkModeToggle) {
+            darkModeToggle.addEventListener('change', function() {
+                if (this.checked) {
+                    localStorage.setItem('theme', 'dark');
+                    applyTheme(true);
+                } else {
+                    localStorage.setItem('theme', 'light');
+                    applyTheme(false);
+                }
+            });
+        }
+    });
+</script>

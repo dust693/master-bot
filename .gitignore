@@ -1,0 +1,85 @@
+# =====================
+# Python
+# =====================
+
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environment
+venv/
+env/
+.venv/
+ENV/
+
+# =====================
+# PyCharm
+# =====================
+
+.idea/
+*.iml
+
+# =====================
+# Environment / Secrets
+# =====================
+
+.env
+.env.*
+*.key
+*.pem
+
+# API keys
+config_secret.py
+secrets.py
+
+# =====================
+# Jupyter
+# =====================
+
+.ipynb_checkpoints/
+
+# =====================
+# Logs
+# =====================
+
+*.log
+logs/
+
+# =====================
+# Data files
+# =====================
+
+*.csv
+*.xlsx
+*.xls
+
+# PDFs / Documents
+*.pdf
+
+# Images
+*.png
+*.jpg
+*.jpeg
+
+# =====================
+# Build
+# =====================
+
+build/
+dist/
+*.egg-info/
+
+# =====================
+# OS
+# =====================
+
+.DS_Store
+Thumbs.db
+
+# =====================
+# Temporary
+# =====================
+
+*.tmp
+*.bak
+*.swp

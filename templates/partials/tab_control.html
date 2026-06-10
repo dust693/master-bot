@@ -1,0 +1,153 @@
+<div class="tab-pane fade show active" id="tab-control">
+    <div class="card p-4 mb-4 bg-white border-primary border-2">
+        <div class="row g-3 align-items-end">
+            <div class="col-md-3">
+                <label class="fw-bold text-muted small">Λειτουργία (Mode)</label>
+                <select class="form-select border-secondary" onchange="fetch('/set_mode', {method:'POST', body:new URLSearchParams({mode:this.value})})">
+                    <option value="paper">Paper Trading</option>
+                    <option value="live">Live Trading</option>
+                </select>
+            </div>
+
+            <div class="col-md-2">
+                <label class="fw-bold text-muted small">Νόμισμα (Base)</label>
+                <input type="text" class="form-control border-secondary text-primary fw-bold text-uppercase"
+                       value="{{ global_cfg.base_currency }}"
+                       placeholder="π.χ. FDUSD"
+                       onchange="fetch('/set_base_currency', {method:'POST', body:new URLSearchParams({currency:this.value})}).then(r => r.json()).then(d => alert(d.msg))">
+            </div>
+
+            <div class="col-md-2">
+                <label class="fw-bold text-muted small">Max Ζεύγη</label>
+                <input type="number" id="pairCount" class="form-control border-secondary" value="5">
+            </div>
+
+            <div class="col-md-5 d-flex gap-2">
+                <button class="btn btn-success fw-bold flex-grow-1" onclick="toggleBot('start')">▶ ΕΚΚΙΝΗΣΗ BOT</button>
+                <button class="btn btn-secondary fw-bold flex-grow-1" onclick="toggleBot('stop')">⏹ ΣΤΑΜΑΤΗΜΑ BOT</button>
+            </div>
+        </div>
+    </div>
+
+    <div class="card p-4 bg-white">
+        <h5 class="fw-bold mb-3">Πλήρης Παραμετροποίηση Στρατηγικής</h5>
+        <form id="strategyForm">
+            <div class="row mb-4">
+                <div class="col-md-3">
+                    <label class="fw-bold small text-muted">Timeframe</label>
+                    <select name="timeframe" class="form-select form-select-sm">
+                        <option value="1m" {% if global_cfg.timeframe == '1m' %}selected{% endif %}>1m</option>
+                        <option value="5m" {% if global_cfg.timeframe == '5m' %}selected{% endif %}>5m</option>
+                        <option value="15m" {% if global_cfg.timeframe == '15m' %}selected{% endif %}>15m</option>
+                        <option value="30m" {% if global_cfg.timeframe == '30m' %}selected{% endif %}>30m</option>
+                        <option value="1h"  {% if global_cfg.timeframe == '1h' %}selected{% endif %}>1h</option>
+                        <option value="4h"  {% if global_cfg.timeframe == '4h' %}selected{% endif %}>4h</option>
+                        <option value="1d"  {% if global_cfg.timeframe == '1d' %}selected{% endif %}>1d</option>
+                        <option value="1w"  {% if global_cfg.timeframe == '1w' %}selected{% endif %}>1w</option>
+                        <option value="1M"  {% if global_cfg.timeframe == '1M' %}selected{% endif %}>1M</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="fw-bold small text-muted">Λογική Συνδυασμού</label>
+                    <select name="logic" class="form-select form-select-sm">
+                        <option value="OR" {% if global_cfg.logic == 'OR' %}selected{% endif %}>OR (Αρκεί ένας)</option>
+                        <option value="MAJORITY" {% if global_cfg.logic == 'MAJORITY' %}selected{% endif %}>MAJORITY (Πλειοψηφία)</option>
+                        <option value="AND" {% if global_cfg.logic == 'AND' %}selected{% endif %}>AND (Όλοι μαζί)</option>
+                    </select>
+                </div>
+                <div class="col-md-3">
+                    <label class="fw-bold small text-muted">Stop Loss (%)</label>
+                    <input type="number" step="0.1" name="sl_pct" class="form-control form-control-sm" value="{{ global_cfg.sl_pct }}">
+                </div>
+                <div class="col-md-3">
+                    <label class="fw-bold small text-muted">Take Profit (%)</label>
+                    <input type="number" step="0.1" name="tp_pct" class="form-control form-control-sm" value="{{ global_cfg.tp_pct }}">
+                </div>
+            </div>
+
+            <div class="row mb-4">
+                <div class="col-12">
+                    <div class="card border-info bg-light">
+                        <div class="card-body">
+                            <h6 class="fw-bold text-info mb-3">🚀 Trailing Stop (Κυλιόμενο Stop Loss)</h6>
+                            <div class="form-check form-switch mb-3">
+                                <input class="form-check-input" type="checkbox" name="use_trailing_stop" id="use_trailing_stop" value="true" {% if ts_cfg.enabled %}checked{% endif %}>
+                                <label class="form-check-label fw-bold" for="use_trailing_stop">Ενεργοποίηση Trailing Stop</label>
+                            </div>
+                            <div class="row g-3" id="trailing-fields">
+                                <div class="col-md-3">
+                                    <label class="small text-muted">Μέθοδος</label>
+                                    <select name="trailing_method" class="form-select form-select-sm">
+                                        <option value="percent" {% if ts_cfg.method == 'percent' %}selected{% endif %}>Ποσοστό (%)</option>
+                                        <option value="atr" {% if ts_cfg.method == 'atr' %}selected{% endif %}>ATR Based</option>
+                                    </select>
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="small text-muted">Trail (%)</label>
+                                    <input type="number" step="0.1" name="trail_pct" class="form-control form-control-sm" value="{{ ts_cfg.trail_pct * 100 }}">
+                                </div>
+                                <div class="col-md-3">
+                                    <label class="small text-muted">Activation (%)</label>
+                                    <input type="number" step="0.1" name="activation_pct" class="form-control form-control-sm" value="{{ ts_cfg.activation_pct * 100 }}">
+                                </div>
+                                <div class="col-md-3 d-flex align-items-end">
+                                    <div class="form-check">
+                                        <input class="form-check-input" type="checkbox" name="use_fixed_sl_with_trailing" id="use_fixed_sl_with_trailing" value="true" {% if ts_cfg.use_alongside_fixed_sl %}checked{% endif %}>
+                                        <label class="form-check-label small" for="use_fixed_sl_with_trailing">Μαζί με Fixed SL</label>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <div class="accordion mb-4" id="indicatorsAccordion">
+                {% for cat_name, indicators in categories.items() %}
+                <div class="accordion-item">
+                    <h2 class="accordion-header"><button class="accordion-button collapsed fw-bold" type="button" data-bs-toggle="collapse" data-bs-target="#cat_{{ loop.index }}">{{ cat_name }}</button></h2>
+                    <div id="cat_{{ loop.index }}" class="accordion-collapse collapse" data-bs-parent="#indicatorsAccordion">
+                        <div class="accordion-body bg-light"><div class="row g-2">
+                                {% for ind_name in indicators %}
+                                {% set ind_params = strategy_cfg[ind_name] %}
+                                <div class="col-md-6">
+                                    <div class="indicator-card">
+                                        <div class="indicator-header">
+                                            <div class="form-check form-switch m-0 me-3">
+                                                <input class="form-check-input ind-checkbox" type="checkbox" name="use_{{ ind_name }}" id="chk_{{ ind_name }}" {% if ind_params.enabled %}checked{% endif %} onchange="document.getElementById('settings_{{ ind_name }}').style.display = this.checked ? 'block' : 'none';">
+                                            </div>
+                                            <label class="fw-bold m-0 flex-grow-1" for="chk_{{ ind_name }}">{{ ind_name }}</label>
+                                            <button type="button" class="btn btn-sm btn-outline-secondary py-0 px-2" onclick="restoreDefaults('{{ ind_name }}')">Default</button>
+                                        </div>
+                                        <div id="settings_{{ ind_name }}" class="indicator-body" style="display: {% if ind_params.enabled %}block{% else %}none{% endif %};">
+                                            <div class="row g-2">
+                                                {% for param_name, param_val in ind_params.items() %}
+                                                    {% if param_name != 'enabled' and param_name != 'signal_options' %}
+                                                    <div class="col-6">
+                                                        <label class="small text-muted mb-1">{{ param_name }}</label>
+                                                        {% if (param_name == 'signal' or param_name == 'signal_type') and 'signal_options' in ind_params %}
+                                                            <select class="form-select form-select-sm" name="{{ ind_name }}_{{ param_name }}" id="input_{{ ind_name }}_{{ param_name }}">
+                                                                {% for opt_key, opt_desc in ind_params.signal_options.items() %}
+                                                                    <option value="{{ opt_key }}" {% if param_val == opt_key %}selected{% endif %}>{{ opt_desc }}</option>
+                                                                {% endfor %}
+                                                            </select>
+                                                        {% else %}
+                                                            <input type="text" class="form-control form-control-sm" name="{{ ind_name }}_{{ param_name }}" id="input_{{ ind_name }}_{{ param_name }}" value="{{ param_val }}">
+                                                        {% endif %}
+                                                    </div>
+                                                    {% endif %}
+                                                {% endfor %}
+                                            </div>
+                                        </div>
+                                    </div>
+                                </div>
+                                {% endfor %}
+                            </div></div>
+                    </div>
+                </div>
+                {% endfor %}
+            </div>
+            <button type="submit" class="btn btn-primary w-100 fw-bold py-2">💾 ΑΠΟΘΗΚΕΥΣΗ ΡΥΘΜΙΣΕΩΝ</button>
+        </form>
+    </div>
+</div>

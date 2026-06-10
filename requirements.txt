@@ -1,0 +1,6 @@
+flask
+python-dotenv
+pandas
+pandas-ta
+requests
+numpy==2.2.6

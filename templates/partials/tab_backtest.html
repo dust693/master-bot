@@ -1,0 +1,76 @@
+<div class="tab-pane fade" id="tab-backtest">
+    
+    <div class="card p-4 bg-white mb-4 shadow-sm border-primary">
+        <div class="d-flex align-items-center mb-2">
+            <h5 class="fw-bold text-primary m-0">📅 Επιλογή Περιόδου & Εκτέλεση</h5>
+        </div>
+        <p class="text-muted small mb-4 border-bottom pb-2">
+            Το Backtest θα τρέξει αυτόματα με το <b>Timeframe</b>, τους <b>Δείκτες</b>, το <b>SL/TP</b> και το <b>Trailing Stop</b>.
+        </p>
+        <form id="backtestForm">
+            <div class="row g-3 align-items-end">
+                <div class="col-md-3">
+                    <label class="fw-bold small">Από Ημερομηνία</label>
+                    <input type="date" id="btStart" name="start_date" class="form-control border-primary" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="fw-bold small">Έως Ημερομηνία</label>
+                    <input type="date" id="btEnd" name="end_date" class="form-control border-primary" required>
+                </div>
+                <div class="col-md-3">
+                    <label class="fw-bold small">Max Ζεύγη Βάσει Όγκου</label>
+                    <input type="number" id="pairCountBacktest" name="pair_count" class="form-control border-primary" value="5" min="1">
+                </div>
+                <div class="col-md-3 d-flex gap-2">
+                    <button type="submit" id="btnRunBacktest" class="btn btn-primary w-100 fw-bold py-2 shadow-sm">🔬 ΕΚΤΕΛΕΣΗ</button>
+                    <button type="button" id="btnCancelBacktest" class="btn btn-danger fw-bold py-2 shadow-sm" style="display: none;" onclick="cancelBacktest()">⏹ ΑΚΥΡΩΣΗ</button>
+                </div>
+            </div>
+        </form>
+    </div>
+
+    <div class="card p-4 bg-white shadow-sm" id="backtestResults" style="display: none;">
+        
+        <div class="d-flex justify-content-between align-items-center mb-4">
+            <h5 class="fw-bold text-primary m-0">📊 Συνολικά Αποτελέσματα Στρατηγικής</h5>
+            <span class="badge bg-dark fs-6" id="resPairsFound">Βρέθηκαν 0 Κερδοφόρα</span>
+        </div>
+        
+        <div class="row mb-5">
+            <div class="col-12">
+                <h6 class="fw-bold text-muted mb-3">Πλήρες Ιστορικό Συναλλαγών (Όλα τα κερδοφόρα ζεύγη)</h6>
+                <div style="max-height: 350px; overflow-y: auto; border: 1px solid #dee2e6; border-radius: 8px;">
+                    <table class="table table-hover table-history text-center m-0">
+                        <thead class="table-light sticky-top shadow-sm">
+                            <tr><th>Ζεύγος</th><th>Είσοδος (BUY)</th><th>Τιμή Αγοράς</th><th>Κλείσιμο (SELL)</th><th>Τιμή Πώλησης</th><th>P&L</th><th>Λόγος Έξοδου</th></tr>
+                        </thead>
+                        <tbody id="tradeHistoryBody"></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+
+        <div class="row">
+            <div class="col-12 border-top pt-4">
+                <h5 class="fw-bold text-primary mb-3">🔍 Γράφημα & Ανάλυση ανά Ζεύγος</h5>
+                <div class="d-flex align-items-center gap-3 mb-4">
+                    <label class="fw-bold text-muted mb-0">Επιλέξτε Ζεύγος για Οπτικοποίηση:</label>
+                    <select id="pairDetailsDropdown" class="form-select border-primary fw-bold" style="max-width: 300px;" onchange="renderPairDetails(this.value)">
+                        <option value="">-- Επιλογή Ζεύγους --</option>
+                    </select>
+                </div>
+                
+                <div id="pairDetailsDisplay" style="display: none;">
+                    <div id="pairStatsBox" class="p-3 bg-light rounded border border-secondary-subtle mb-4" style="font-size: 0.95rem;"></div>
+                    <div class="card shadow-sm border-0">
+                        <div class="card-body p-0">
+                            <div id="plotlyChartContainer" style="width: 100%;"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+    </div>
+</div>
