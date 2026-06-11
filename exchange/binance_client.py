@@ -84,43 +84,66 @@ class BinanceExchange:
         estimated_server_time_ms = int(time.time() * 1000) + self._time_offset
         return datetime.fromtimestamp(estimated_server_time_ms / 1000, tz=timezone.utc)
 
-    def get_top_volume_pairs(self, limit: int = 5, quote_asset: str = "USDC") -> list:
-        logger.debug(f"📊 Ζητήθηκαν τα Top {limit} {quote_asset} ζεύγη βάσει όγκου...")
-
-        # ΠΡΟΣΠΑΘΕΙΑ 1: Χρήση του κανονικού 24h Ticker για ταξινόμηση βάσει όγκου
+    def get_top_volume_pairs(self, limit: int, quote_asset: str, trading_type: str = "spot") -> list:
+        """
+        Επιστρέφει τα κορυφαία σε όγκο ζεύγη βάσει του quote_asset (Base Currency από το UI)
+        και φιλτράρει ανάλογα με το αν είμαστε σε 'spot' ή 'margin' αγορά.
+        """
         try:
-            tickers = self._make_request("GET", "/api/v3/ticker/24hr", signed=False)
-            if tickers and isinstance(tickers, list):
-                valid_pairs = [t for t in tickers if t.get('symbol', '').endswith(quote_asset)]
-                valid_pairs.sort(key=lambda x: float(x.get('quoteVolume', 0)), reverse=True)
-                result = [p['symbol'] for p in valid_pairs[:limit]]
-                if result:
-                    logger.info(f"✅ Επιτυχής ανάκτηση {len(result)} ζευγών από το 24h Ticker.")
-                    return result
+            # 1. Ανάκτηση πληροφοριών αγοράς από τη Binance
+            url_info = f"{self.base_url}/api/v3/exchangeInfo"
+            response_info = requests.get(url_info)
+            if response_info.status_code != 200:
+                logger.error("❌ Αδυναμία ανάκτησης exchangeInfo από τη Binance.")
+                return []
+
+            data_info = response_info.json()
+
+            # Καθορισμός αν είμαστε σε Margin Mode
+            is_margin = (trading_type.lower() == "margin")
+            market_label = "MARGIN" if is_margin else "SPOT"
+
+            # Φιλτράρισμα ζευγών με βάση το Base Currency (quoteAsset) και τα επίσημα booleans της Binance
+            allowed_symbols = set()
+            for s in data_info.get('symbols', []):
+                if s['quoteAsset'].upper() == quote_asset.upper() and s['status'] == 'TRADING':
+                    # Χρήση των bulletproof boolean πεδίων της Binance
+                    if is_margin and s.get('isMarginTradingAllowed', False):
+                        allowed_symbols.add(s['symbol'])
+                    elif not is_margin and s.get('isSpotTradingAllowed', False):
+                        allowed_symbols.add(s['symbol'])
+
+            # 2. Ανάκτηση των 24h Tickers για τον υπολογισμό του όγκου συναλλαγών
+            url_ticker = f"{self.base_url}/api/v3/ticker/24hr"
+            response_ticker = requests.get(url_ticker)
+            if response_ticker.status_code != 200:
+                logger.error("❌ Αδυναμία ανάκτησης ticker/24hr από τη Binance.")
+                return []
+
+            tickers = response_ticker.json()
+
+            # Κρατάμε μόνο τα ζεύγη που πέρασαν το φιλτράρισμα της αγοράς
+            pairs_with_volume = []
+            for t in tickers:
+                symbol = t['symbol']
+                if symbol in allowed_symbols:
+                    pairs_with_volume.append({
+                        'symbol': symbol,
+                        'volume': float(t.get('quoteVolume', 0))
+                    })
+
+            # Ταξινόμηση με βάση τον όγκο (φθίνουσα σειρά)
+            pairs_with_volume.sort(key=lambda x: x['volume'], reverse=True)
+
+            # Επιστροφή των κορυφαίων ζευγών βάσει του limit
+            top_pairs = [p['symbol'] for p in pairs_with_volume[:limit]]
+            logger.info(
+                f"📊 [SCREENER] Βρέθηκαν {len(top_pairs)} κορυφαία ζεύγη για την αγορά {market_label} με Base {quote_asset}.")
+            return top_pairs
+
         except Exception as e:
-            logger.warning(f"⚠️ Αποτυχία σύνδεσης στο 24h Ticker ({e}).")
-
-        # FALLBACK ΜΗΧΑΝΙΣΜΟΣ: Αν το 24h ticker φάει rate limit ή βγάλει σφάλμα,
-        # χρησιμοποιούμε το /exchangeInfo που είναι ελαφρύ και δεν αποτυγχάνει ποτέ!
-        logger.info("🔄 Ενεργοποίηση Fallback: Άμεση ανάκτηση διαθέσιμων ζευγών από /api/v3/exchangeInfo...")
-        try:
-            info = self._make_request("GET", "/api/v3/exchangeInfo", signed=False)
-            if info and 'symbols' in info:
-                valid_pairs = []
-                for s in info['symbols']:
-                    # Φιλτράρουμε μόνο όσα είναι ενεργά για trading και ανήκουν στο Base Currency (π.χ. USDC)
-                    if s.get('status') == 'TRADING' and s.get('quoteAsset') == quote_asset:
-                        valid_pairs.append(s['symbol'])
-
-                result = valid_pairs[:limit]
-                if result:
-                    logger.info(
-                        f"✅ [FALLBACK SUCCESS] Ανακτήθηκαν {len(result)} ζεύγη επιτυχώς. Το Backtest συνεχίζει!")
-                    return result
-        except Exception as e:
-            logger.error(f"❌ Αποτυχία και στον μηχανισμό Fallback exchangeInfo: {e}")
-
-        return []
+            logger.error(f"❌ Σφάλμα κατά την ανάκτηση των κορυφαίων ζευγών: {e}")
+            return []
 
     def get_historical_top_volume_pairs(self, start_time: int, end_time: int, limit: int = 5, pool_size: int = 25) -> list:
         logger.info(f"🔍 Αναζήτηση των top {limit} ζευγών βάσει ιστορικού όγκου...")

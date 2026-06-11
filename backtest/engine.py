@@ -21,9 +21,18 @@ def run_backtester(form_data, exchange, manager):
         start_date = form_data.get('start_date')
         end_date = form_data.get('end_date')
 
-        # --- Ζητάμε ΑΜΕΣΑ μια μεγάλη λίστα από το API βάσει όγκου 24h ---
+        # --- Ζητάμε ΑΜΕΣΑ μια μεγάλη λίστα από το API βάσει όγκου 24h λαμβάνοντας υπόψη το Trading Type ---
         pool_size = config.SCANNER_PAIR_LIMIT
-        top_pairs_pool = exchange.get_top_volume_pairs(limit=pool_size, quote_asset=config.BASE_CURRENCY)
+
+        # Διαβάζουμε δυναμικά αν το UI έχει επιλέξει spot ή margin
+        trading_type = getattr(config, "TRADING_TYPE", "spot")
+
+        # Καλούμε τη συνάρτηση περνώντας και το trading_type
+        top_pairs_pool = exchange.get_top_volume_pairs(
+            limit=pool_size,
+            quote_asset=config.BASE_CURRENCY,
+            trading_type=trading_type
+        )
         
         if not top_pairs_pool: 
             return {"error": "Δεν βρέθηκαν δεδομένα αγοράς."}
@@ -33,15 +42,17 @@ def run_backtester(form_data, exchange, manager):
         pairs_to_check = [p for p in top_pairs_pool if p not in blacklist]
 
         # =========================================================================
-        # 👑 GLOBAL MARKET FILTER: BITCOIN UPTREND CHECK (με TrendCache - 1d & 4h)
+        # 👑 GLOBAL MARKET FILTER: BITCOIN UPTREND PREPARATION (Μια φορά στην αρχή)
         # =========================================================================
         trend_cache = TrendCache(exchange)
-
-        # Το btc_filter_dict έχει πλέον keys ως datetime (ανά 4ωρο)
         btc_filter_dict = trend_cache.get_btc_trend_filter(start_date, end_date)
 
-        # Φτιάχνουμε μια λίστα με τα sorted timestamps του BTC για binary search / fallback
-        btc_timestamps = sorted(list(btc_filter_dict.keys()))
+        # Μετατροπή του dictionary σε DataFrame
+        btc_trend_df = pd.DataFrame(list(btc_filter_dict.items()), columns=['timestamp', 'is_btc_bullish'])
+
+        # Εξασφαλίζουμε σωστό datetime format χωρίς timezones για απόλυτη συμβατότητα στο merge
+        btc_trend_df['timestamp'] = pd.to_datetime(btc_trend_df['timestamp']).dt.tz_localize(None)
+        btc_trend_df = btc_trend_df.sort_values('timestamp')
 
         print(f"✅ Φίλτρο BTC έτοιμο (χρήση 1d & 4h trend cache).")
 
@@ -77,108 +88,143 @@ def run_backtester(form_data, exchange, manager):
                 
             # Υπολογισμός τεχνικών δεικτών & σημάτων (signal: +1 = Αγορά, -1 = Έξοδος)
             df = calculate_all_indicators(df, manager.strategy_cfg)
-            
-            in_position = False
+
+            # Μετατρέπουμε την κατάσταση θέσης σε string: None, 'long', 'short'
+            position_type = None
             entry_price = 0.0
             entry_time = None
-            position_high = 0.0
+            position_extreme = 0.0  # Θα κρατάει το High για Longs και το Low για Shorts (για το Trailing)
             trades = []
 
-            # Προσομοίωση candle-by-candle
+            # --- ΕΝΣΩΜΑΤΩΣΗ ΤΟΥ ΦΙΛΤΡΟΥ BTC ΣΤΟ DF ΤΟΥ ΣΥΓΚΕΚΡΙΜΕΝΟΥ ΝΟΜΙΣΜΑΤΟΣ ---
+            # Μετρέπουμε το timestamp του νομίσματος σε datetime (tz-naive) για να ταιριάζει με το BTC
+            df['timestamp'] = pd.to_datetime(df['timestamp']).dt.tz_localize(None)
+            df = df.sort_values('timestamp')
+
+            # merge_asof: Κουμπώνει αυτόματα σε κάθε κερί το status του BTC εκείνης της στιγμής
+            df = pd.merge_asof(df, btc_trend_df, on='timestamp', direction='backward')
+
+            # Γέμισμα τυχόν κενών στην αρχή με True
+            df['is_btc_bullish'] = df['is_btc_bullish'].fillna(True)
+
+            # =========================================================================
+            # 🔄 Προσομοίωση candle-by-candle
+            # =========================================================================
             for idx, row in df.iterrows():
                 current_time = row['timestamp']
                 current_close = float(row['close'])
                 current_high = float(row['high'])
                 current_low = float(row['low'])
 
-                # Έλεγχος αν το BTC ήταν σε Uptrend τη συγκεκριμένη στιγμή (κερί)
-                # Το πεδίο έχει ήδη υπολογιστεί σωστά και πάρει την τιμή από το 4h/1d cache
                 is_btc_bullish = bool(row['is_btc_bullish'])
-                
-                if in_position:
-                    # Ενημέρωση του υψηλότερου σημείου για το Trailing Stop
-                    if current_high > position_high:
-                        position_high = current_high
-                        
+                trading_type = getattr(config, 'TRADING_TYPE', 'spot')
+
+                # =============================================================
+                # Α) ΔΙΑΧΕΙΡΙΣΗ ΑΝΟΙΧΤΗΣ ΘΕΣΗΣ
+                # =============================================================
+                if position_type is not None:
                     exit_trade = False
                     exit_reason = ""
                     exit_price = current_close
-                    
-                    # 1. Έλεγχος Fixed Stop Loss
                     stop_loss_pct = getattr(config, 'STOP_LOSS_PCT', 0.05)
-                    sl_price = entry_price * (1 - stop_loss_pct)
-                    if current_low <= sl_price:
-                        exit_trade = True
-                        exit_reason = "Stop Loss"
-                        exit_price = sl_price
-                        
-                    # 2. Έλεγχος Fixed Take Profit
                     take_profit_pct = getattr(config, 'TAKE_PROFIT_PCT', 0.10)
-                    tp_price = entry_price * (1 + take_profit_pct)
-                    if not exit_trade and current_high >= tp_price:
-                        exit_trade = True
-                        exit_reason = "Take Profit"
-                        exit_price = tp_price
-                        
-                    # 3. Έλεγχος Trailing Stop (Percent ή ATR)
                     ts_config = getattr(config, 'TRAILING_STOP_CONFIG', {})
-                    if not exit_trade and ts_config.get('enabled', False):
-                        activation_pct = ts_config.get('activation_pct', 0.01)
-                        trail_pct = ts_config.get('trail_pct', 0.03)
-                        
-                        # Ενεργοποίηση μόνο αν πιάσαμε το ελάχιστο κέρδος ενεργοποίησης
-                        if (position_high - entry_price) / entry_price >= activation_pct:
-                            ts_price = position_high * (1 - trail_pct)
+
+                    # --- 1. ΔΙΑΧΕΙΡΙΣΗ LONG ΘΕΣΗΣ ---
+                    if position_type == 'long':
+                        if current_high > position_extreme: position_extreme = current_high  # Update peak
+
+                        # Fixed SL / TP
+                        sl_price = entry_price * (1 - stop_loss_pct)
+                        tp_price = entry_price * (1 + take_profit_pct)
+
+                        if current_low <= sl_price:
+                            exit_trade, exit_reason, exit_price = True, "Stop Loss (Long)", sl_price
+                        elif current_high >= tp_price:
+                            exit_trade, exit_reason, exit_price = True, "Take Profit (Long)", tp_price
+
+                        # Trailing Stop Long
+                        elif ts_config.get('enabled', False) and (
+                                (position_extreme - entry_price) / entry_price >= ts_config.get('activation_pct',
+                                                                                                0.01)):
+                            ts_price = position_extreme * (1 - ts_config.get('trail_pct', 0.03))
                             if current_low <= ts_price:
-                                exit_trade = True
-                                exit_reason = "Trailing Stop"
-                                exit_price = max(ts_price, current_close)
-                                
-                    # 4. Έλεγχος Τεχνικού Σήματος Έξοδου από τη Στρατηγική
-                    if not exit_trade and row.get('signal') == -1:
-                        exit_trade = True
-                        exit_reason = "Indicator Exit Signal"
-                        exit_price = current_close
-                        
-                    # Εκτέλεση Έξοδου
+                                exit_trade, exit_reason, exit_price = True, "Trailing Stop (Long)", max(ts_price,
+                                                                                                        current_close)
+
+                        # Signal Exit (Short Signal -1 closes Long)
+                        elif row.get('signal') == -1:
+                            exit_trade, exit_reason, exit_price = True, "Indicator Exit Signal (Long)", current_close
+
+                    # --- 2. ΔΙΑΧΕΙΡΙΣΗ SHORT ΘΕΣΗΣ (ΜΟΝΟ ΑΝ ΕΙΝΑΙ MARGIN) ---
+                    elif position_type == 'short':
+                        if current_low < position_extreme: position_extreme = current_low  # Update trough
+
+                        # Στα Shorts το SL είναι ΠΑΝΩ και το TP είναι ΚΑΤΩ
+                        sl_price = entry_price * (1 + stop_loss_pct)
+                        tp_price = entry_price * (1 - take_profit_pct)
+
+                        if current_high >= sl_price:
+                            exit_trade, exit_reason, exit_price = True, "Stop Loss (Short)", sl_price
+                        elif current_low <= tp_price:
+                            exit_trade, exit_reason, exit_price = True, "Take Profit (Short)", tp_price
+
+                        # Trailing Stop Short
+                        elif ts_config.get('enabled', False) and (
+                                (entry_price - position_extreme) / entry_price >= ts_config.get('activation_pct',
+                                                                                                0.01)):
+                            ts_price = position_extreme * (1 + ts_config.get('trail_pct', 0.03))
+                            if current_high >= ts_price:
+                                exit_trade, exit_reason, exit_price = True, "Trailing Stop (Short)", min(ts_price,
+                                                                                                         current_close)
+
+                        # Signal Exit (Long Signal +1 closes Short)
+                        elif row.get('signal') == 1:
+                            exit_trade, exit_reason, exit_price = True, "Indicator Exit Signal (Short)", current_close
+
+                    # --- ΕΚΤΕΛΕΣΗ ΕΞΟΔΟΥ (ΚΟΙΝΗ) ---
                     if exit_trade:
-                        pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                        # Υπολογισμός κέρδους (Στα shorts το κέρδος βγαίνει αν η τιμή πέσει)
+                        if position_type == 'long':
+                            pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                        else:
+                            pnl_pct = ((entry_price - exit_price) / entry_price) * 100
+
                         trades.append({
-                            "symbol": symbol,
-                            "entry_time": entry_time,
-                            "entry_price": entry_price,
-                            "exit_time": current_time,
-                            "exit_price": exit_price,
-                            "pnl_pct": pnl_pct,
+                            "symbol": symbol, "entry_time": entry_time, "entry_price": entry_price,
+                            "exit_time": current_time, "exit_price": exit_price, "pnl_pct": pnl_pct,
                             "reason": exit_reason
                         })
-                        in_position = False
-                        
+                        position_type = None  # Επιστροφή σε flat κατάσταση
+
+                # =============================================================
+                # Β) ΕΛΕΓΧΟΣ ΓΙΑ ΑΝΟΙΓΜΑ ΝΕΑΣ ΘΕΣΗΣ (ΟΤΑΝ ΕΙΜΑΣΤΕ OUT)
+                # =============================================================
                 else:
-                    # 🎯 ΚΡΙΣΙΜΟ ΦΙΛΤΡΟ: Αν το BTC δεν είναι σε Uptrend, απαγορεύεται η τεχνική ανάλυση / αγορά
-                    if not is_btc_bullish:
-                        continue
-                        
-                    # Έλεγχος Σήματος Αγοράς
-                    if row.get('signal') == 1:
-                        in_position = True
-                        entry_price = current_close
-                        entry_time = current_time
-                        position_high = current_high
-                        
-            # Force close αν έμεινε ανοιχτή θέση στο τέλος του ιστορικού
-            if in_position:
+                    # Σήμα LONG (+1): Ανοίγει πάντα αν το BTC είναι bullish
+                    if row.get('signal') == 1 and is_btc_bullish:
+                        position_type = 'long'
+                        entry_price, entry_time = current_close, current_time
+                        position_extreme = current_high
+
+                    # Σήμα SHORT (-1): Ανοίγει ΜΟΝΟ αν έχουμε επιλέξει MARGIN στο UI
+                    elif row.get('signal') == -1 and trading_type == 'margin' and not is_btc_bullish:
+                        position_type = 'short'
+                        entry_price, entry_time = current_close, current_time
+                        position_extreme = current_low
+
+                # Force close στο τέλος του backtest
+            if position_type is not None:
                 last_row = df.iloc[-1]
                 exit_price = float(last_row['close'])
-                pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                if position_type == 'long':
+                    pnl_pct = ((exit_price - entry_price) / entry_price) * 100
+                else:
+                    pnl_pct = ((entry_price - exit_price) / entry_price) * 100
                 trades.append({
-                    "symbol": symbol,
-                    "entry_time": entry_time,
-                    "entry_price": entry_price,
-                    "exit_time": last_row['timestamp'],
-                    "exit_price": exit_price,
-                    "pnl_pct": pnl_pct,
-                    "reason": "Force Close (End of Backtest)"
+                    "symbol": symbol, "entry_time": entry_time, "entry_price": entry_price,
+                    "exit_time": last_row['timestamp'], "exit_price": exit_price, "pnl_pct": pnl_pct,
+                    "reason": f"Force Close (End of Backtest {position_type.upper()})"
                 })
                 
             # Ανάλυση και αποθήκευση αποτελεσμάτων μόνο αν το ζεύγος βγήκε κερδοφόρο

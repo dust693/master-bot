@@ -18,11 +18,20 @@
             </div>
 
             <div class="col-md-2">
+                <label class="fw-bold text-muted small">Τύπος Αγοράς</label>
+                <select class="form-select border-secondary text-success fw-bold"
+                        onchange="fetch('/set_trading_type', {method:'POST', body:new URLSearchParams({trading_type:this.value})}).then(r => r.json()).then(d => alert(d.msg))">
+                    <option value="spot" {% if global_cfg.trading_type == 'spot' %}selected{% endif %}>Spot (Only Long)</option>
+                    <option value="margin" {% if global_cfg.trading_type == 'margin' %}selected{% endif %}>Margin (Long & Short)</option>
+                </select>
+            </div>
+
+            <div class="col-md-2">
                 <label class="fw-bold text-muted small">Max Ζεύγη</label>
                 <input type="number" id="pairCount" class="form-control border-secondary" value="5">
             </div>
 
-            <div class="col-md-5 d-flex gap-2">
+            <div class="col-md-3 d-flex gap-2">
                 <button class="btn btn-success fw-bold flex-grow-1" onclick="toggleBot('start')">▶ ΕΚΚΙΝΗΣΗ BOT</button>
                 <button class="btn btn-secondary fw-bold flex-grow-1" onclick="toggleBot('stop')">⏹ ΣΤΑΜΑΤΗΜΑ BOT</button>
             </div>

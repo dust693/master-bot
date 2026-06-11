@@ -24,6 +24,7 @@ STOP_LOSS_PCT      = 0.02
 TAKE_PROFIT_PCT    = 0.04
 QUOTE_PRECISION    = 2
 QUANTITY_PRECISION = 6
+TRADING_TYPE       = "spot"  # Επιλογές: "spot" (μόνο Long) ή "margin" (Long & Short)
 
 # =================================================================
 # 3. ΡΥΘΜΙΣΕΙΣ BOT & PAPER TRADING

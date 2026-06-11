@@ -294,7 +294,8 @@ def index():
         "sl_pct": config.STOP_LOSS_PCT * 100,
         "tp_pct": config.TAKE_PROFIT_PCT * 100,
         "logic": manager.strategy_cfg.get('COMBINATION_LOGIC', 'AND'),
-        "base_currency": config.BASE_CURRENCY  # Προστέθηκε το base currency
+        "base_currency": config.BASE_CURRENCY,  # Προστέθηκε το base currency
+        "trading_type": getattr(config, 'TRADING_TYPE', 'spot')
     }
     return render_template('index.html',
                            strategy_cfg=manager.strategy_cfg,
@@ -474,6 +475,15 @@ def cancel_backtest():
     logger.warning("🚨 Λήφθηκε αίτημα ακύρωσης του Backtest από το UI!")
     config.BACKTEST_CONFIG['cancel'] = True  # Ενεργοποίηση της ακύρωσης στο config σου
     return jsonify({"msg": "Το Backtest ακυρώθηκε επιτυχώς."})
+
+@app.route('/set_trading_type', methods=['POST'])
+def set_trading_type():
+    t_type = request.form.get('trading_type', 'spot').lower()
+    if t_type in ['spot', 'margin']:
+        config.TRADING_TYPE = t_type
+        logger.info(f"🔄 Ο τύπος αγοράς άλλαξε σε: {t_type.upper()}")
+        return jsonify({"msg": f"Επιτυχής αλλαγή σε {t_type.upper()} Trading!"})
+    return jsonify({"error": "Μη έγκυρος τύπος αγοράς."}), 400
 
 if __name__ == '__main__':
     app.run(debug=True, use_reloader=False)
