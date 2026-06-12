@@ -293,6 +293,23 @@
             background-color: #2d2d2d !important;
             color: #ffffff !important;
         }
+
+        /* Bootstrap .table-light (header του πίνακα Ιστορικού Συναλλαγών):
+           Κανονικά έχει ανοιχτό γκρι φόντο + μαύρο κείμενο (αόρατο σε dark mode) */
+        body.dark-mode .table-light,
+        body.dark-mode .table-light > th,
+        body.dark-mode .table > :not(caption) > * > .table-light {
+            background-color: #2b2b2b !important;
+            color: #e0e0e0 !important;
+        }
+
+        /* List-group items (χρησιμοποιούνται στις κάρτες "Κερδοφορία/Ρίσκο/Ποιότητα"
+           του pairStatsBox): default Bootstrap text color είναι σκούρο/μαύρο */
+        body.dark-mode .list-group-item {
+            background-color: transparent !important;
+            color: #e0e0e0 !important;
+            border-color: #444444 !important;
+        }
     </style>
 </head>
 <body>

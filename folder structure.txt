@@ -23,7 +23,8 @@ trading_bot/
 │
 ├── utils/
 │   ├── __init__.py
-│   └── logger.py
+│   ├── logger.py
+│   └── json_safe.py             # ΝΕΟ ΑΡΧΕΙΟ (make_json_safe: Timestamp/numpy -> JSON-safe types)
 │
 ├── backtest/
 │   ├── __init__.py

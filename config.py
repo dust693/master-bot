@@ -72,6 +72,17 @@ BACKTEST_CONFIG = {
     "cancel": False  # Διακόπτης ασφαλείας για την ακύρωση του τρέχοντος backtest
 }
 
+# Στήλες "ωμών" δεδομένων κεριού (από το exchange) + βοηθητικές στήλες του
+# backtest (BTC trend filter, σήμα) - ΔΕΝ είναι δείκτες, άρα εξαιρούνται από
+# τον διαχωρισμό "overlays/oscillators" στο backtest/engine.py (αλλιώς
+# στέλνονταν στο UI ως ψεύτικα "oscillators" -> έσπαγε το γράφημα Plotly,
+# π.χ. το 'close_time' είναι Timestamp, όχι αριθμός).
+RAW_CANDLE_COLUMNS = [
+    "open", "high", "low", "close", "volume", "timestamp",
+    "close_time", "qav", "num_trades", "tbb", "tbq", "ignore",
+    "is_btc_bullish", "date_only"
+]
+
 SYMBOL_FILTERS = {
     "min_volume_usdc": 1000000,
     "blacklist": ["USDCUSDC", "USDTUSDT", "BUSDUSDC", "TUSDUSDC", "USD1USDC", "FDUSDUSDC", "EURUSDC"],

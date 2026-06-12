@@ -7,6 +7,7 @@ from backtest.metrics import calculate_advanced_metrics
 from backtest.screener_filters import evaluate_pair_performance
 from utils.logger import *
 from backtest.trend_cache import TrendCache
+from utils.json_safe import make_json_safe
 
 def run_backtester(form_data, exchange, manager):
     # Μηδενισμός του διακόπτη ακύρωσης κατά την εκκίνηση
@@ -259,19 +260,31 @@ def run_backtester(form_data, exchange, manager):
                     overlays = []
                     oscillators = []
                     for col in df.columns:
-                        if col in ['open', 'high', 'low', 'close', 'volume', 'timestamp', 'signal'] or 'signal' in col:
+                        if col in config.RAW_CANDLE_COLUMNS or col == 'signal' or 'signal' in col:
                             continue
                         if any(x in col for x in ['SMA', 'EMA', 'DEMA', 'TEMA', 'WMA', 'VWAP', 'BB', 'KC', 'DC']):
                             overlays.append(col)
                         else:
                             oscillators.append(col)
                             
+                    # Advanced metrics ΜΟΝΟ για τα trades ΑΥΤΟΥ του ζεύγους (όχι
+                    # το συνολικό "metrics" του backtest). Χωρίς αυτό, το
+                    # details.metrics στο renderPairDetails() (scripts.html)
+                    # ήταν undefined -> "m.net_profit" έσκαζε με TypeError
+                    # ΠΡΙΝ καν κληθεί το drawChart() -> το γράφημα ΔΕΝ
+                    # εμφανιζόταν ΚΑΘΟΛΟΥ, ανεξάρτητα από τις άλλες διορθώσεις.
+                    pair_advanced_metrics = calculate_advanced_metrics(
+                        trades_history=trades, initial_balance=overall_initial, timeframe=config.TIMEFRAME
+                    )
+
                     pair_details[symbol] = {
                         "candles": df.to_dict(orient="records"),
                         "indicators": {
                             "overlays": overlays,
                             "oscillators": oscillators
-                        }
+                        },
+                        "metrics": pair_advanced_metrics,
+                        "logic_used": manager.combination
                     }
                     
                     # Ενημέρωση συνολικού πορτοφολιού
@@ -292,17 +305,23 @@ def run_backtester(form_data, exchange, manager):
             timeframe=config.TIMEFRAME
         )
 
-        return {
-            "trades": total_trades, 
-            "initial": overall_initial, 
+        # --- ΚΑΘΑΡΙΣΜΟΣ ΓΙΑ JSON ---
+        # Τα "history" και "pair_details" (μέσω df.to_dict) περιέχουν pandas
+        # Timestamp και numpy τύπους (float64, int64, bool_) που ΔΕΝ είναι
+        # JSON-serializable. Χωρίς αυτό το καθάρισμα, το jsonify() στο app.py
+        # έσκαζε ΕΚΤΟΣ αυτού του try/except -> ΚΑΝΕΝΑ log + γενικό μήνυμα
+        # "Υπήρξε σφάλμα ή καθυστέρηση στο δίκτυο." στο UI.
+        return make_json_safe({
+            "trades": total_trades,
+            "initial": overall_initial,
             "final": round(overall_balance, 2),
-            "profit": f"{overall_profit_pct:.2f}", 
-            "pairs_summary": pairs_summary, 
+            "profit": f"{overall_profit_pct:.2f}",
+            "pairs_summary": pairs_summary,
             "history": successful_pairs_history,
             "pair_details": pair_details,
             "metrics": advanced_metrics,
             "msg": f"Βρέθηκαν {profitable_pairs_found} κερδοφόρα ζεύγη."
-        }
+        })
         
     except Exception as e:
         import traceback

@@ -405,8 +405,8 @@
                             <td class="small text-muted">${trade.entry_time}</td>
                             <td>${trade.entry_price}$</td>
                             <td class="small text-muted">${trade.exit_time}</td>
-                            <td>${trade.exit_price}$</td>
-                            <td class="${pnlClass}">${trade.pnl_pct}%</td>
+                            <td>${trade.exit_price.toFixed(2)}$</td>
+                            <td class="${pnlClass}">${trade.pnl_pct.toFixed(2)}%</td>
                             <td><span class="badge bg-dark">${trade.reason}</span></td>
                         </tr>`;
                 });
@@ -418,6 +418,14 @@
             } else {
                 console.error("❌ Σφάλμα ή Timeout:", error);
                 alert("Υπήρξε σφάλμα ή καθυστέρηση στο δίκτυο.");
+                // ΠΡΟΣΘΗΚΗ: Στέλνουμε το σφάλμα στο backend ώστε να γραφτεί
+                // στο Python log (fire-and-forget, χωρίς await ώστε να μη
+                // μπλοκάρει το finally block).
+                fetch('/log_client_error', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ context: 'Backtest', message: error.message || String(error) })
+                }).catch(() => {});
             }
         } finally {
             // Το block finally εκτελείται ΠΑΝΤΑ, είτε πετύχει, είτε βγάλει error, είτε γίνει abort.
@@ -492,9 +500,13 @@
         }
 
         // Δημιουργία HTML badges για κάθε ενεργό δείκτη
+        // details.indicators = {overlays: [...], oscillators: [...]} (όχι array!)
         let indicatorsBadges = '';
-        if (details.indicators && details.indicators.length > 0) {
-            details.indicators.forEach(ind => {
+        const allIndicators = details.indicators
+            ? [...(details.indicators.overlays || []), ...(details.indicators.oscillators || [])]
+            : [];
+        if (allIndicators.length > 0) {
+            allIndicators.forEach(ind => {
                 indicatorsBadges += `<span class="badge bg-primary me-1">${ind}</span>`;
             });
         } else {
@@ -597,11 +609,37 @@
     //  11. Plotly.purge: καθαρίζει παλιό γράφημα από τον container
     //      Plotly.newPlot: σχεδιάζει το νέο (responsive: true = προσαρμόζεται στο πλάτος)
     function drawChart(symbol, details) {
-        const cData = details.chart_data;
-        if (!cData) {
+        // ΣΗΜΕΙΩΣΗ: το backend (backtest/engine.py) ΔΕΝ στέλνει έτοιμο "chart_data".
+        // Στέλνει "candles" (λίστα από κεριά με ΟΛΕΣ τις στήλες, μαζί με τους
+        // δείκτες) + "indicators" (λίστες με τα ΟΝΟΜΑΤΑ των overlay/oscillator
+        // στηλών). Εδώ τα μετατρέπουμε στη μορφή {dates, open, high, low,
+        // close, overlays:{name:[...]}, oscillators:{name:[...]}} που
+        // χρειάζεται ο υπόλοιπος κώδικας του γραφήματος.
+        const candles = details.candles;
+        if (!candles || candles.length === 0) {
             document.getElementById('plotlyChartContainer').innerHTML = "<p class='text-muted text-center mt-5'>Δεν υπάρχουν δεδομένα γραφήματος.</p>";
             return;
         }
+
+        const overlays = {};
+        (details.indicators?.overlays || []).forEach(name => {
+            overlays[name] = candles.map(c => c[name]);
+        });
+
+        const oscillators = {};
+        (details.indicators?.oscillators || []).forEach(name => {
+            oscillators[name] = candles.map(c => c[name]);
+        });
+
+        const cData = {
+            dates: candles.map(c => c.timestamp),
+            open: candles.map(c => c.open),
+            high: candles.map(c => c.high),
+            low: candles.map(c => c.low),
+            close: candles.map(c => c.close),
+            overlays: overlays,
+            oscillators: oscillators
+        };
 
         const plotData = [];
 

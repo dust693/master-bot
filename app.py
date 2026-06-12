@@ -321,9 +321,17 @@ def route_backtest():
 
     form_data = request.form.to_dict()
     # Συνέχεια του κώδικά σου...
-    result = run_backtester(form_data, exchange, manager)
-
-    return jsonify(result)
+    try:
+        result = run_backtester(form_data, exchange, manager)
+        return jsonify(result)
+    except Exception as e:
+        # ΠΡΟΣΘΗΚΗ: Το run_backtester() έχει ΔΙΚΟ ΤΟΥ try/except, αλλά το
+        # jsonify(result) τρέχει ΕΞΩ από αυτό - αν το αποτέλεσμα περιέχει
+        # μη σερια-ποιήσιμους τύπους (ή προκύψει άλλο σφάλμα εδώ), χωρίς
+        # αυτό το try/except το Flask γύριζε HTML 500 σελίδα, το JS
+        # res.json() έσκαζε, και ΤΙΠΟΤΑ δεν καταγραφόταν στο log.
+        logger.exception("❌ Σφάλμα κατά την επιστροφή αποτελεσμάτων του Backtest:")
+        return jsonify({"error": f"Σφάλμα κατά την επιστροφή αποτελεσμάτων: {str(e)}"}), 500
 
 @app.route('/cancel_backtest', methods=['POST'])
 def cancel_backtest():
@@ -331,6 +339,20 @@ def cancel_backtest():
     logger.warning("🚨 Λήφθηκε αίτημα ακύρωσης του Backtest από το UI!")
     config.BACKTEST_CONFIG['cancel'] = True  # Ενεργοποίηση της ακύρωσης στο config σου
     return jsonify({"msg": "Το Backtest ακυρώθηκε επιτυχώς."})
+
+@app.route('/log_client_error', methods=['POST'])
+def log_client_error():
+    """
+    ΝΕΟ ROUTE: Δέχεται σφάλματα που συμβαίνουν στο ΦΥΛΛΟΜΕΤΡΗΤΗ (JS catch
+    blocks - π.χ. αποτυχία fetch/JSON στο /backtest) και τα γράφει στο
+    Python log, ώστε να φαίνονται μαζί με τα υπόλοιπα logs του bot.
+    """
+    data = request.get_json(silent=True) or {}
+    context = data.get("context", "UI")
+    message = data.get("message", "Άγνωστο σφάλμα")
+    logger.error(f"🖥️ [CLIENT ERROR] [{context}] {message}")
+    return jsonify({"msg": "ok"})
+
 
 @app.route('/set_trading_type', methods=['POST'])
 def set_trading_type():
