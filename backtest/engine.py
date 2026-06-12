@@ -4,6 +4,7 @@ from indicators.technical_analysis import calculate_all_indicators
 import pandas as pd
 import pandas_ta as ta
 from backtest.metrics import calculate_advanced_metrics
+from backtest.screener_filters import evaluate_pair_performance
 from utils.logger import *
 from backtest.trend_cache import TrendCache
 
@@ -86,7 +87,12 @@ def run_backtester(form_data, exchange, manager):
 
             checked_pairs += 1
                 
-            # Υπολογισμός τεχνικών δεικτών & σημάτων (signal: +1 = Αγορά, -1 = Έξοδος)
+            # Υπολογισμός τεχνικών δεικτών & σημάτων.
+            # Το calculate_all_indicators (μέσω indicators/signal_combiner.py)
+            # προσθέτει ΚΑΙ τη συνδυασμένη στήλη 'signal' (+1 Αγορά / -1 Πώληση
+            # / 0 Ουδέτερο) για ΚΑΘΕ κερί, βάσει του COMBINATION_LOGIC
+            # (AND/OR/MAJORITY) του manager.strategy_cfg. Αυτή η στήλη 'signal'
+            # είναι αυτή που διαβάζει το loop παρακάτω μέσω row.get('signal').
             df = calculate_all_indicators(df, manager.strategy_cfg)
 
             # Μετατρέπουμε την κατάσταση θέσης σε string: None, 'long', 'short'
@@ -227,11 +233,18 @@ def run_backtester(form_data, exchange, manager):
                     "reason": f"Force Close (End of Backtest {position_type.upper()})"
                 })
                 
-            # Ανάλυση και αποθήκευση αποτελεσμάτων μόνο αν το ζεύγος βγήκε κερδοφόρο
+            # Ανάλυση και αποθήκευση αποτελεσμάτων μόνο αν το ζεύγος περάσει τα
+            # "αυστηρά κριτήρια ποιότητας" του config.PERFORMANCE_FILTERS
+            # (CAGR, Sharpe, Sortino, Drawdown, Win Rate, Profit Factor κλπ.)
+            # - όχι μόνο "βγήκε κερδοφόρο" όπως πριν (pair_total_pnl_pct > 0).
+            # Η λογική του ελέγχου ζει στο backtest/screener_filters.py.
             if trades:
                 pair_total_pnl_pct = sum([t['pnl_pct'] for t in trades])
-                
-                if pair_total_pnl_pct > 0:
+                pair_metrics = evaluate_pair_performance(
+                    trades, initial_balance=overall_initial, timeframe=config.TIMEFRAME
+                )
+
+                if pair_metrics["passed_filters"]:
                     profitable_pairs_found += 1
                     successful_pairs_history.extend(trades)
                     total_trades += len(trades)

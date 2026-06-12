@@ -12,11 +12,14 @@ trading_bot/
 │
 ├── indicators/
 │   ├── __init__.py
-│   └── technical_analysis.py
+│   ├── technical_analysis.py
+│   └── signal_combiner.py      # ΝΕΟ ΑΡΧΕΙΟ (συνδυάζει *_signal -> 'signal', AND/OR/MAJORITY)
 │
 ├── strategies/
 │   ├── __init__.py
-│   └── strategy_manager.py
+│   ├── strategy_manager.py
+│   ├── settings_updater.py      # ΝΕΟ ΑΡΧΕΙΟ (ενημέρωση config από /update_strategy)
+│   └── position_manager.py      # ΝΕΟ ΑΡΧΕΙΟ (open/close θέσεων: Take Profit, Trailing/Fixed Stop, Sell Signal)
 │
 ├── utils/
 │   ├── __init__.py
@@ -26,7 +29,8 @@ trading_bot/
 │   ├── __init__.py
 │   ├── engine.py
 │   ├── metrics.py
-│   └── trend_cache.py          # ΝΕΟ ΑΡΧΕΙΟ (caching BTC trend με 1d & 4h)
+│   ├── trend_cache.py          # ΝΕΟ ΑΡΧΕΙΟ (caching BTC trend με 1d & 4h)
+│   └── screener_filters.py     # ΝΕΟ ΑΡΧΕΙΟ (εφαρμόζει config.PERFORMANCE_FILTERS ανά ζεύγος)
 │
 └── templates/
     ├── base.html

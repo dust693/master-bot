@@ -145,9 +145,33 @@ class BinanceExchange:
             logger.error(f"❌ Σφάλμα κατά την ανάκτηση των κορυφαίων ζευγών: {e}")
             return []
 
-    def get_historical_top_volume_pairs(self, start_time: int, end_time: int, limit: int = 5, pool_size: int = 25) -> list:
+    def get_historical_top_volume_pairs(self, start_time: int, end_time: int, limit: int = 5,
+                                         pool_size: int = None, quote_asset: str = None,
+                                         trading_type: str = None) -> list:
+        """
+        Επιστρέφει τα top 'limit' ζεύγη βάσει ΙΣΤΟΡΙΚΟΥ όγκου (άθροισμα qav
+        στο διάστημα start_time..end_time), ανάμεσα στα 'pool_size' ζεύγη με
+        τον μεγαλύτερο ΤΡΕΧΟΝΤΑ 24h όγκο (μέσω get_top_volume_pairs).
+
+        ΔΙΟΡΘΩΣΗ BUG: Παλιότερα γινόταν κλήση
+        self.get_top_volume_pairs(limit=pool_size) χωρίς το υποχρεωτικό
+        όρισμα 'quote_asset' -> TypeError αν καλούνταν αυτή η συνάρτηση.
+
+        Τα pool_size, quote_asset και trading_type, αν δεν δοθούν, παίρνουν
+        τις τιμές τους ΑΠΟΚΛΕΙΣΤΙΚΑ από το config.py (κεντρικός εγκέφαλος):
+          - pool_size    -> config.SCANNER_PAIR_LIMIT
+          - quote_asset  -> config.BASE_CURRENCY
+          - trading_type -> config.TRADING_TYPE
+        """
+        if pool_size is None:
+            pool_size = config.SCANNER_PAIR_LIMIT
+        if quote_asset is None:
+            quote_asset = config.BASE_CURRENCY
+        if trading_type is None:
+            trading_type = getattr(config, "TRADING_TYPE", "spot")
+
         logger.info(f"🔍 Αναζήτηση των top {limit} ζευγών βάσει ιστορικού όγκου...")
-        current_top = self.get_top_volume_pairs(limit=pool_size)
+        current_top = self.get_top_volume_pairs(limit=pool_size, quote_asset=quote_asset, trading_type=trading_type)
         volumes = {}
         for sym in current_top:
             df = self.get_historical_data(sym, "1d", start_time=start_time, end_time=end_time)

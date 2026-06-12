@@ -26,6 +26,15 @@ QUOTE_PRECISION    = 2
 QUANTITY_PRECISION = 6
 TRADING_TYPE       = "spot"  # Επιλογές: "spot" (μόνο Long) ή "margin" (Long & Short)
 
+# Πόσες "ημέρες" αντιστοιχούν σε ΕΝΑ candle, ανά timeframe.
+# Χρησιμοποιείται στο auto_trade_loop (app.py) για τον υπολογισμό του
+# lookback διαστήματος (πόσο ιστορικό να ζητήσουμε από το exchange ώστε
+# να υπάρχουν αρκετά candles για τον υπολογισμό των δεικτών).
+TIMEFRAME_TO_DAYS = {
+    '1m': 1 / 1440, '5m': 5 / 1440, '15m': 15 / 1440, '30m': 30 / 1440,
+    '1h': 1 / 24, '4h': 4 / 24, '1d': 1, '1w': 7, '1M': 30
+}
+
 # =================================================================
 # 3. ΡΥΘΜΙΣΕΙΣ BOT & PAPER TRADING
 # =================================================================
@@ -146,9 +155,37 @@ TRAILING_STOP_CONFIG = {
     "use_alongside_fixed_sl": True      # Παράλληλη χρήση με το σταθερό Stop Loss ως "πάτωμα"
 }
 
-# Runtime State: Λεξικό για την καταγραφή των ανώτατων τιμών (peaks)
-# των ανοιχτών θέσεων στο Paper Trading (π.χ. {"BTCUSDC": 68500.0})
-PAPER_TRAILING_STOPS = {}
+# Runtime State: Λεξικό με τα δεδομένα παρακολούθησης ΚΑΘΕ ανοιχτής θέσης
+# που άνοιξε το ίδιο το bot - σε Paper ΚΑΙ σε Live mode.
+#   { "BTCUSDC": {"entry_price": ..., "highest_price": ..., "stop_price": ...} }
+#
+# Χρησιμοποιείται από το strategies/position_manager.py για τον έλεγχο
+# Take Profit / Trailing Stop / Fixed Stop Loss, ΑΝΕΞΑΡΤΗΤΑ από το BOT_MODE.
+# (Πριν, αυτό υπήρχε ΜΟΝΟ για Paper Mode -> σε Live Mode δεν γινόταν ΚΑΝΕΝΑΣ
+# έλεγχος TP/SL/Trailing, μόνο indicator sell signal.)
+OPEN_POSITIONS_DATA = {}
+
+# =================================================================
+# BTC TREND FILTER (backtest/trend_cache.py)
+# =================================================================
+# Ρυθμίσεις για το "Φίλτρο Τάσης BTC" (Multi-Timeframe: 1d + 4h):
+#   - 1d: golden cross (EMA_fast > EMA_slow) + τιμή πάνω από τα 2 EMA +
+#         τιμή πάνω από το Donchian mid -> "macro" τάση (golden_cross,
+#         above_emas, structure_bullish -> daily_bullish)
+#   - 4h: τιμή > EMA_fast > EMA_slow -> "timing" επιβεβαίωση (4h_bullish)
+#   - Τελικό: UPTREND μόνο αν daily_bullish ΚΑΙ 4h_bullish (ΚΑΙ τα 2 True)
+#
+# Χρησιμοποιείται:
+#   - Στο Backtest (get_btc_trend_filter): υπολογίζει την τάση για όλη την
+#     ιστορική περίοδο, με debug log των διαστημάτων UPTREND/DOWNTREND.
+#   - Στο Live/Paper (get_current_btc_trend): υπολογίζει την ΤΡΕΧΟΥΣΑ τάση,
+#     με debug log πριν από κάθε έλεγχο ανοίγματος θέσης (ΔΕΝ μπλοκάρει
+#     αγορές - μόνο ενημερωτικό).
+BTC_TREND_CONFIG = {
+    "ema_fast": 50,            # Γρήγορος EMA (1d & 4h)
+    "ema_slow": 200,           # Αργός EMA (1d & 4h) - "golden cross" όταν fast > slow
+    "donchian_period": 20      # Περίοδος Donchian Channel για το "structure_bullish" (1d)
+}
 
 STRATEGY_CONFIG = {
     "SMA": {"enabled": True, "fast_period": 10, "slow_period": 50, "signal": "crossover", "signal_options": {"crossover": "Crossover (Fast πάνω από Slow)", "price_above": "Τιμή πάνω από Slow SMA", "price_above_fast": "Τιμή πάνω από Fast SMA"}},
@@ -202,15 +239,28 @@ Avg Win / Avg Loss        <0.8                        >1.2                   >1.
 Max Consecutive Losses    >8                          <6                      <4
 '''
 
+# ΣΗΜΕΙΩΣΗ (fix Παρατήρηση #2 - σχόλια vs πραγματικές τιμές):
+# Τα σχόλια ΠΡΙΝ έλεγαν ότι οι τιμές αντιστοιχούν στο επίπεδο "Άνετο" του
+# παραπάνω πίνακα, αλλά οι περισσότερες τιμές είναι στην πραγματικότητα ΠΙΟ
+# ΧΑΛΑΡΕΣ - βρίσκονται ανάμεσα στο "Αποκλεισμός" και το "Minimum για live".
+# Αυτό είναι ΣΚΟΠΙΜΟ: στο screening θέλουμε να περνούν αρκετά ζεύγη ώστε να
+# υπάρχει υλικό προς αξιολόγηση, όχι μόνο τα "ιδανικά". Τα σχόλια παρακάτω
+# περιγράφουν την ΠΡΑΓΜΑΤΙΚΗ τιμή και σε ποιο επίπεδο του πίνακα αντιστοιχεί.
+#
+# ΔΙΟΡΘΩΣΗ ΤΙΜΗΣ: το "min_avg_trade_pct" ήταν 0.4 (=40% μέσο κέρδος/trade -
+# πρακτικά απίθανο, μονάδες όπως στο STOP_LOSS_PCT όπου 0.1 = 10%). Σύμφωνα
+# με τον πίνακα (Minimum >0.3%, Άνετο >0.8%) η σωστή τιμή είναι 0.004 (0.4%).
+# Αυτό ήταν πιθανότατα η αιτία που το screening δεν έβρισκε Golden Pairs
+# (βλ. Παρατήρηση #3).
 PERFORMANCE_FILTERS = {
-    "min_cagr": 0.1,                  # Ετήσια Απόδοση > 20%
-    "min_avg_trade_pct": 0.4,         # Μέσο κέρδος ανά trade > 0.8%
-    "max_drawdown": 0.3,              # Μέγιστο Drawdown < 12%
-    "min_sharpe": 0.6,                # Sharpe Ratio > 1.5
-    "min_sortino": 1.0,               # Sortino Ratio > 2.0
-    "min_win_rate": 0.4,              # Ποσοστό Επιτυχίας > 55%
-    "min_profit_factor": 1.3,         # Profit Factor > 2.0
-    "min_reward_to_risk": 0.9,        # Avg Win / Avg Loss > 1.5
-    "min_trades": 10,                 # Ελάχιστος αριθμός συναλλαγών
-    "max_consecutive_losses": 6       # Συνεχόμενες ήττες αυστηρά < 6 (άρα max 5)
+    "min_cagr": 0.1,                  # CAGR >= 10% (επίπεδο "Minimum για live"· "Άνετο" θα ήταν >20%)
+    "min_avg_trade_pct": 0.004,       # Μέσο κέρδος/trade >= 0.4% ("Minimum" >0.3%, "Άνετο" >0.8%)
+    "max_drawdown": 0.3,              # Max Drawdown <= 30% (πιο χαλαρό από "Minimum" <20%· αποκλείει μόνο τα χειρότερα >35%)
+    "min_sharpe": 0.6,                # Sharpe >= 0.6 (ανάμεσα σε "Αποκλεισμός" <0.5 και "Minimum" >1.0)
+    "min_sortino": 1.0,               # Sortino >= 1.0 (ανάμεσα σε "Αποκλεισμός" <0.8 και "Minimum" >1.5)
+    "min_win_rate": 0.4,              # Win Rate >= 40% (στο όριο του "Αποκλεισμός" <40%· "Minimum" θα ήταν >45%)
+    "min_profit_factor": 1.3,         # Profit Factor >= 1.3 (ανάμεσα σε "Αποκλεισμός" <1.2 και "Minimum" >1.5)
+    "min_reward_to_risk": 0.9,        # Avg Win / Avg Loss >= 0.9 (ανάμεσα σε "Αποκλεισμός" <0.8 και "Minimum" >1.2)
+    "min_trades": 10,                 # Ελάχιστος αριθμός συναλλαγών (πιο χαλαρό από "Αποκλεισμός" <30)
+    "max_consecutive_losses": 6       # Συνεχόμενες ήττες αυστηρά < 6, άρα max 5 (επίπεδο "Minimum" <6)
 }

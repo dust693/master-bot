@@ -3,6 +3,7 @@ from typing import Optional
 import pandas as pd
 import config
 from indicators.technical_analysis import calculate_all_indicators
+from indicators.signal_combiner import SIGNAL_COLUMNS
 from utils.logger import logger
 
 @dataclass
@@ -21,15 +22,10 @@ class Signal:
         return {1: "BUY", -1: "SELL", 0: "HOLD"}.get(self.action, "HOLD")
 
 class StrategyManager:
-    # Παράγεται αυτόματα από το config.INDICATOR_CATEGORIES.
-    # Αντιστοιχεί κάθε δείκτη στη στήλη signal του DataFrame.
-    # Ο ATR εξαιρείται (col = None) γιατί δεν παράγει signal.
-    SIGNAL_COLUMNS = {
-        ind: col
-        for inds in config.INDICATOR_CATEGORIES.values()
-        for ind, col in inds.items()
-        if col is not None
-    }
+    # SIGNAL_COLUMNS (δείκτης -> στήλη σήματος) έρχεται πλέον από το
+    # indicators/signal_combiner.py, που είναι η ΜΟΝΑΔΙΚΗ πηγή αλήθειας και
+    # χρησιμοποιείται και από το backtest engine (μέσω technical_analysis.py).
+    SIGNAL_COLUMNS = SIGNAL_COLUMNS
 
     def __init__(self, strategy_cfg: dict = None):
         self.strategy_cfg = strategy_cfg or config.STRATEGY_CONFIG
